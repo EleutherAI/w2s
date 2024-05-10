@@ -9,10 +9,9 @@ from transformers import (
 from .utils import assert_type
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def gather_hiddens(model: PreTrainedModel, dataset: Dataset):
     dataset = dataset.with_format("torch", device="cuda")
-    model.to("cuda")
 
     cfg = assert_type(PretrainedConfig, model.config)
     D = assert_type(int, cfg.hidden_size)

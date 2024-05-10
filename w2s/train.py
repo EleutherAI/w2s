@@ -64,7 +64,6 @@ def main():
     training_args = TrainingArguments(
         str(root / "weak"),
         adam_beta2=0.95,
-        # bf16=True,  # bf16 mixed precision training
         evaluation_strategy="epoch",
         load_best_model_at_end=True,
         logging_steps=50,
@@ -134,7 +133,7 @@ def main():
     # Train the strong model
     STRONG_NAME = "meta-llama/Meta-Llama-3-8B"
     strong_model = AutoModelForSequenceClassification.from_pretrained(
-        STRONG_NAME, torch_dtype="auto"
+        STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
     )
     strong_tokenizer = AutoTokenizer.from_pretrained(STRONG_NAME)
     strong_model.config.pad_token_id = (
@@ -145,23 +144,33 @@ def main():
     strong_model.config.problem_type = "single_label_classification"
 
     def strong_processor(examples):
-        out = strong_tokenizer(examples["txt"], truncation=True)
-        if "weak_label" in examples:
-            out["labels"] = examples["weak_label"]
+        return strong_tokenizer(examples["txt"], truncation=True)
 
-        return out
-
-    strong_train = splits["train"].add_column("weak_label", train_probs)
-    strong_test = splits["test"].add_column("weak_label", test_probs)
+    strong_train = (
+        splits["train"].remove_columns("label").add_column("labels", train_probs)
+    )
+    strong_test = (
+        splits["test"].remove_columns("label").add_column("labels", test_probs)
+    )
 
     strong_train = strong_train.map(strong_processor, batched=True)
     strong_test = strong_test.map(strong_processor, batched=True)
 
-    train_acts = gather_hiddens(strong_model, strong_train)
-    labels = knn_average(train_acts, strong_train["labels"], 200)
+    acts_path = root / "strong/acts.pt"
+    if acts_path.exists():
+        print(f"Loading strong activations from {acts_path}")
+        train_acts = torch.load(acts_path, map_location=strong_model.device)
+    else:
+        print("Gathering strong activations")
+        train_acts = gather_hiddens(strong_model, strong_train)
+        torch.save(train_acts, acts_path)
+
+    y = torch.tensor(strong_train["labels"], device=train_acts.device)
+    labels = knn_average(train_acts, y, 200)
     top = torch.abs(labels - 0.5).topk(len(labels) // 2).indices
     strong_train = strong_train.select(top.tolist())
 
+    training_args.label_names = ["labels"]
     training_args.output_dir = str(root / "strong")
 
     lora_cfg = LoraConfig(
@@ -177,7 +186,6 @@ def main():
     )
     trainer = DistillationTrainer(
         args=training_args,
-        compute_metrics=compute_metrics,
         data_collator=DataCollatorWithPadding(strong_tokenizer),
         eval_dataset=strong_test,
         model=get_peft_model(strong_model, lora_cfg),
