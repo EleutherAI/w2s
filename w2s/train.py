@@ -100,14 +100,13 @@ def main():
         adam_beta2=0.95,
         evaluation_strategy="epoch",
         label_names=["labels"],
-        learning_rate=2e-5,
         load_best_model_at_end=True,
         logging_steps=50,
         metric_for_best_model="auroc",
-        per_device_train_batch_size=16,
         save_strategy="epoch",
         save_total_limit=1,
         tf32=True,  # Use Tensor Cores even for fp32 matmuls
+        warmup_steps=100,
         weight_decay=0.01,
     )
 
@@ -124,6 +123,9 @@ def main():
             weak_model = AutoModelForSequenceClassification.from_pretrained(
                 cfg.weak_name, torch_dtype="auto"
             )
+            # HuggingFace init for the head is too large
+            weak_model.score.weight.data *= 0.01
+
             weak_model = get_peft_model(weak_model, lora_cfg)
         else:
             print("Loading weak model from:", weak_path)
@@ -169,6 +171,9 @@ def main():
     strong_model = AutoModelForSequenceClassification.from_pretrained(
         STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
     )
+    # HuggingFace init for the head is too large
+    strong_model.score.weight.data *= 0.01
+
     strong_model.config.pad_token_id = (
         strong_tokenizer.pad_token_id
     ) = strong_tokenizer.eos_token_id
@@ -176,9 +181,10 @@ def main():
     def strong_processor(examples):
         return strong_tokenizer(examples["txt"], truncation=True)
 
-    strong_train = splits["train"].map(strong_processor, batched=True)
-    ceil_test = splits["train"].map(strong_processor, batched=True)
-    ceil_test = splits["test"].rename_column("hard_label", "labels")
+    strong_train = train.map(strong_processor, batched=True)
+    ceil_test = test.map(strong_processor, batched=True).rename_column(
+        "hard_label", "labels"
+    )
 
     training_args.output_dir = str(root / "ceil")
     trainer = Trainer(
@@ -192,6 +198,13 @@ def main():
     )
     trainer.train()
     move_best_ckpt(trainer)
+
+    # Init a fresh model for w2s experiment
+    strong_model = AutoModelForSequenceClassification.from_pretrained(
+        STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
+    )
+    # HuggingFace init for the head is too large
+    strong_model.score.weight.data *= 0.01
 
     # Make sure that we use CrossEntropyLoss
     strong_model.config.problem_type = "single_label_classification"
