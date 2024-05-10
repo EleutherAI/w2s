@@ -66,8 +66,7 @@ def move_best_ckpt(trainer: Trainer):
     print(f"Best model (loss {perf:.3f}) saved at: {dest}")
 
 
-def main():
-    cfg = parse(TrainConfig)
+def train(cfg: TrainConfig):
     lora_cfg = LoraConfig(target_modules=LORA_MODULES)
 
     STRONG_NAME = "meta-llama/Meta-Llama-3-8B"
@@ -241,4 +240,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    train(parse(TrainConfig))
