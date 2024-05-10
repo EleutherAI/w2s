@@ -3,7 +3,7 @@ import hashlib
 from collections import Counter
 from dataclasses import dataclass
 from random import Random
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from datasets import (
     Dataset as HfDataset,
@@ -57,26 +57,33 @@ def balance(ds: HfDataset, seed: int):
 
 
 def load_and_process_dataset(
-    ds_name: str, seed: int = 0, split_sizes: Optional[dict] = None
+    ds_name: str,
+    split_sizes: dict,
+    seed: int = 0,
+    take_test_from_train: bool = False,
 ):
-    if split_sizes is None:
-        split_sizes = dict(train=None, test=None)
+    n_tr, n_te = split_sizes.get("train", 0), split_sizes.get("test", 0)
+    if take_test_from_train:
+        # in this case we gather excess documents from the train set, and
+        # at the end redistribute them to the test set
+        split_sizes["train"] = split_sizes["train"] + split_sizes["test"]
+        del split_sizes["test"]
 
     if ds_name not in _REGISTRY:
         raise ValueError(f"Unknown dataset {ds_name}, please register")
     cfg = _REGISTRY[ds_name]
     results = {}
     for split, n_docs in split_sizes.items():
-        ds = cfg.loader(split)
-        ds = ds.shuffle(seed=seed)  # shuffling a bit pointless for test set but wtv
+        ds = cfg.loader(split).shuffle(seed=seed)
+        ds = ds.map(functools.partial(cfg.formatter, rng=Random(seed)))  # type: ignore
+        ds = ds.filter(lambda ex: ex["txt"] != "")  # remove empty texts
+        ds = balance(ds, seed)
+
         try:
             ds = ds.select(range(n_docs))
         except IndexError:
-            print(f"Warning {ds_name} has less than {n_docs} docs, using all {len(ds)}")
-        ds = balance(
-            ds.map(functools.partial(cfg.formatter, rng=Random(seed))),  # type: ignore
-            seed,
-        )
+            print(f"{ds_name} has < {n_docs} docs after balancing, using all {len(ds)}")
+
         ds = ds.map(
             lambda ex: {
                 "id": hashlib.sha1(ex["txt"].encode()).hexdigest()[:8],
@@ -84,6 +91,11 @@ def load_and_process_dataset(
             }
         )
         results[split] = ds
+
+    if take_test_from_train:
+        both = results["train"]
+        results["train"] = both.select(range(n_tr))
+        results["test"] = both.select(range(n_tr, n_tr + n_te))
     return results
 
 
@@ -722,7 +734,7 @@ VALID_DATASETS: list[str] = list(_REGISTRY.keys())
 from datasets import disable_caching
 disable_caching()
 
-from weak_to_strong.datasets import load_and_process_dataset, VALID_DATASETS
+from w2s.datasets import load_and_process_dataset, VALID_DATASETS
 import numpy as np
 
 ds_name = "boolq"
