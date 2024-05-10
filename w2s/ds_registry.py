@@ -320,6 +320,10 @@ register_dataset(
 )
 
 
+def format_lichess(ex, rng):
+    return dict(txt=ex["txt"], hard_label=ex["hard_label"])
+
+
 def format_mc_taco(ex, rng):
     template = "{sentence}\n\nGiven the above, {question} Is the answer {answer}?"
     return dict(txt=template.format(**ex), hard_label=ex["label"])
