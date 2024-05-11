@@ -24,9 +24,13 @@ class DatasetConfig:
     # split -> unshuffled dataset of items
     loader: Callable[[str], HfDataset]
     # formats items to have keys 'txt' and 'hard_label', takes a random.Random rng
+    # (or for generative tasks, 'ctx' and 'target', and no 'hard_label' key)
+    # deprecated OAI legacy:
     # optionally also adds the key 'choices', a pair of strings, indicating to use the
     # lm head
     formatter: Callable[[Any], Any]
+    # "classify" or "generate"
+    task: str = "classify"
 
 
 # mapping from dataset name to load function and format function
@@ -76,20 +80,32 @@ def load_and_process_dataset(
     for split, n_docs in split_sizes.items():
         ds = cfg.loader(split).shuffle(seed=seed)
         ds = ds.map(functools.partial(cfg.formatter, rng=Random(seed)))  # type: ignore
-        ds = ds.filter(lambda ex: ex["txt"] != "")  # remove empty texts
-        ds = balance(ds, seed)
+
+        if cfg.task == "generate":
+            ds = ds.filter(lambda ex: ex["ctx"] != "")  # remove empty texts
+            ds = ds.filter(lambda ex: ex["target"] != "")
+        else:
+            ds = ds.filter(lambda ex: ex["txt"] != "")  # remove empty texts
+            ds = balance(ds, seed)  # balance to 50/50
 
         try:
             ds = ds.select(range(n_docs))
         except IndexError:
             print(f"{ds_name} has < {n_docs} docs after balancing, using all {len(ds)}")
 
-        ds = ds.map(
-            lambda ex: {
-                "id": hashlib.sha1(ex["txt"].encode()).hexdigest()[:8],
-                "soft_label": [1 - float(ex["hard_label"]), float(ex["hard_label"])],
-            }
-        )
+        if cfg.task == "generate":
+            ds = ds.map(
+                lambda ex: {
+                    "id": hashlib.sha1(ex["ctx"].encode()).hexdigest()[:8],
+                }
+            )
+        else:
+            ds = ds.map(
+                lambda ex: {
+                    "id": hashlib.sha1(ex["txt"].encode()).hexdigest()[:8],
+                    "soft_label": [1 - float(ex["hard_label"]), float(ex["hard_label"])],
+                }
+            )
         results[split] = ds
 
     if take_test_from_train:
@@ -320,8 +336,20 @@ register_dataset(
 )
 
 
+LICHESS_N_TEST = 5000
+
 def format_lichess(ex, rng):
-    return dict(txt=ex["txt"], hard_label=ex["hard_label"])
+    return dict(ctx=ex['ctx'], target=ex['target'])
+
+
+register_dataset(
+    "lichess",
+    DatasetConfig(
+        loader=hf_loader("EleutherAI/lichess-puzzles", n_test=LICHESS_N_TEST),  # type: ignore
+        formatter=format_lichess,  # type: ignore
+        task="generate",
+    ),
+)
 
 
 def format_mc_taco(ex, rng):

@@ -66,6 +66,16 @@ def move_best_ckpt(trainer: Trainer):
     print(f"Best model (loss {perf:.3f}) saved at: {dest}")
 
 
+def lolcat(lol1, lol2):
+    # list-of-list concatenation along the second dimension
+    assert len(lol1) == len(lol2)
+    return [l1 + l2 for l1, l2 in zip(lol1, lol2)]
+
+
+def lolconst(lol, const):
+    return [[const for _ in l] for l in lol]
+
+
 def train(cfg: TrainConfig):
     lora_cfg = LoraConfig(target_modules=LORA_MODULES)
 
@@ -73,23 +83,49 @@ def train(cfg: TrainConfig):
     strong_tokenizer = AutoTokenizer.from_pretrained(STRONG_NAME)
     weak_tokenizer = AutoTokenizer.from_pretrained(cfg.weak_name)
 
+    splits = load_and_process_dataset(
+        cfg.dataset, split_sizes=dict(train=20_000, test=1_000)
+    )
+
+    if 'txt' in splits["train"].column_names:
+        task = "classify"
+    elif 'ctx' in splits["train"].column_names:
+        task = "generate"
+    else:
+        raise ValueError(f"Unrecognized dataset columns: {splits['train'].column_names}")
+
     def weak_processor(examples):
+        if task == "generate":
+            ctx_out = weak_tokenizer(examples["ctx"], truncation=True)
+            trg_out = weak_tokenizer(examples["target"], truncation=True, add_special_tokens=False)
+            breakpoint()
+            return dict(
+                input_ids=lolcat(ctx_out["input_ids"], trg_out["input_ids"]),
+                attention_mask=lolcat(ctx_out["attention_mask"], trg_out["attention_mask"]),
+                labels=lolcat(lolconst(ctx_out["input_ids"], -100), trg_out["input_ids"]),
+            )
+
         out = weak_tokenizer(examples["txt"], truncation=True)
         out["labels"] = examples["hard_label"]
         return out
 
     def compute_metrics(eval_pred):
         predictions, labels = map(torch.from_numpy, eval_pred)
+        if task == "generate":
+            breakpoint()
+            print(eval_pred)
+            raise NotImplementedError("Generation metrics not implemented")
         return dict(
             accuracy=predictions.argmax(dim=1).eq(labels).float().mean(),
             auroc=roc_auc(labels, predictions[:, 1]),
         )
 
-    splits = load_and_process_dataset(
-        cfg.dataset, split_sizes=dict(train=20_000, test=1_000)
-    )
-    test = splits["test"].select_columns(["hard_label", "txt"])
-    train = splits["train"].select_columns(["hard_label", "txt"])
+    if task == "generate":
+        test = splits["test"].select_columns(["ctx", "target"])
+        train = splits["train"].select_columns(["ctx", "target"])
+    else:
+        test = splits["test"].select_columns(["hard_label", "txt"])
+        train = splits["train"].select_columns(["hard_label", "txt"])
     weak_test = test.map(weak_processor, batched=True)
     weak_train = train.map(weak_processor, batched=True)
 
