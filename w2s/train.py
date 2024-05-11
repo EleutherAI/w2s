@@ -34,8 +34,11 @@ class TrainConfig(Serializable):
     dataset: str = field(positional=True)
     """Name of the dataset to use."""
 
-    filtration: bool = field(default=False)
-    """Whether to use the filtration method."""
+    contamination: float = field(default=0.0)
+    """What fraction of data points to remove as outliers."""
+
+    outlier_k: int = field(default=5)
+    """Number of neighbors to consider when removing outliers."""
 
     run_name: str = ""
     """Name of the run."""
@@ -286,8 +289,9 @@ def train(cfg: TrainConfig):
     w2s_train = strong_train.remove_columns("labels").add_column(
         "labels", train_probs.numpy()
     )
-    if cfg.filtration:
-        top = zeta_filter(train_acts, train_probs.to(train_acts.device), 5, q=0.9)
+    if cfg.contamination > 0.0:
+        y = train_probs.to(train_acts.device)
+        top = zeta_filter(train_acts, y, cfg.outlier_k, q=1.0 - cfg.contamination)
         w2s_train = w2s_train.select(top.tolist())
 
     # Check gt metrics every 100 steps during w2s training.
