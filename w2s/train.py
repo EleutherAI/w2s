@@ -9,7 +9,6 @@ from peft import (
     get_peft_model,
 )
 from simple_parsing import Serializable, field, parse
-from sklearn.metrics import roc_auc_score
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -20,6 +19,7 @@ from transformers import (
 
 from .ds_registry import load_and_process_dataset
 from .knn import gather_hiddens, knn_average
+from .roc_auc import roc_auc
 
 
 @dataclass
@@ -79,10 +79,10 @@ def train(cfg: TrainConfig):
         return out
 
     def compute_metrics(eval_pred):
-        predictions, labels = eval_pred
+        predictions, labels = map(torch.from_numpy, eval_pred)
         return dict(
-            accuracy=np.mean(np.argmax(predictions, axis=1) == labels),
-            auroc=roc_auc_score(labels, predictions[:, 1]),
+            accuracy=predictions.argmax(dim=1).eq(labels).float().mean(),
+            auroc=roc_auc(labels, predictions[:, 1]),
         )
 
     splits = load_and_process_dataset(
