@@ -63,7 +63,7 @@ def move_best_ckpt(trainer: Trainer):
     src = Path(path)
     dest = src.parent / "best-ckpt"
     src.rename(dest)
-    print(f"Best model (loss {perf:.3f}) saved at: {dest}")
+    print(f"Best model (auroc {perf:.3f}) saved at: {dest}")
 
 
 def train(cfg: TrainConfig):
@@ -166,39 +166,43 @@ def train(cfg: TrainConfig):
         np.save(label_dir / "train.npy", train_probs)
         np.save(label_dir / "test.npy", test_probs)
 
-    print("\033[32m===== Training strong ceiling model =====\033[0m")
-    strong_model = AutoModelForSequenceClassification.from_pretrained(
-        STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
-    )
-    # HuggingFace init for the head is too large
-    strong_model.score.weight.data *= 0.01
+    strong_ckpt = root / "ceil" / "best-ckpt"
+    if strong_ckpt.exists():
+        print(f"Strong ceiling model already exists at {strong_ckpt}")
+    else:
+        print("\033[32m===== Training strong ceiling model =====\033[0m")
+        strong_model = AutoModelForSequenceClassification.from_pretrained(
+            STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
+        )
+        # HuggingFace init for the head is too large
+        strong_model.score.weight.data *= 0.01
 
-    strong_model.config.pad_token_id = (
-        strong_tokenizer.pad_token_id
-    ) = strong_tokenizer.eos_token_id
+        strong_model.config.pad_token_id = (
+            strong_tokenizer.pad_token_id
+        ) = strong_tokenizer.eos_token_id
 
-    def strong_processor(examples):
-        return strong_tokenizer(examples["txt"], truncation=True)
+        def strong_processor(examples):
+            return strong_tokenizer(examples["txt"], truncation=True)
 
-    strong_train = train.map(strong_processor, batched=True)
-    ceil_test = test.map(strong_processor, batched=True).rename_column(
-        "hard_label", "labels"
-    )
+        strong_train = train.map(strong_processor, batched=True)
+        ceil_test = test.map(strong_processor, batched=True).rename_column(
+            "hard_label", "labels"
+        )
 
-    training_args.output_dir = str(root / "ceil")
-    trainer = Trainer(
-        args=training_args,
-        compute_metrics=compute_metrics,
-        data_collator=DataCollatorWithPadding(strong_tokenizer),
-        eval_dataset=ceil_test,
-        model=get_peft_model(strong_model, lora_cfg),
-        tokenizer=strong_tokenizer,
-        train_dataset=strong_train.rename_column("hard_label", "labels"),
-    )
-    trainer.train()
-    move_best_ckpt(trainer)
+        training_args.output_dir = str(root / "ceil")
+        trainer = Trainer(
+            args=training_args,
+            compute_metrics=compute_metrics,
+            data_collator=DataCollatorWithPadding(strong_tokenizer),
+            eval_dataset=ceil_test,
+            model=get_peft_model(strong_model, lora_cfg),
+            tokenizer=strong_tokenizer,
+            train_dataset=strong_train.rename_column("hard_label", "labels"),
+        )
+        trainer.train()
+        move_best_ckpt(trainer)
 
-    # Init a fresh model for w2s experiment
+    print("\033[32m===== Training w2s model =====\033[0m")
     strong_model = AutoModelForSequenceClassification.from_pretrained(
         STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
     )
