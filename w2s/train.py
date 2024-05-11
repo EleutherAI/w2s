@@ -18,8 +18,10 @@ from transformers import (
     TrainingArguments,
 )
 
+import wandb
+
 from .ds_registry import load_and_process_dataset
-from .knn import gather_hiddens, knn_average
+from .knn import gather_hiddens, zeta_filter
 from .loss import log_confidence_loss
 from .roc_auc import roc_auc
 
@@ -31,6 +33,12 @@ class TrainConfig(Serializable):
 
     dataset: str = field(positional=True)
     """Name of the dataset to use."""
+
+    filtration: bool = field(default=False)
+    """Whether to use the filtration method."""
+
+    run_name: str = ""
+    """Name of the run."""
 
 
 class DistillationTrainer(Trainer):
@@ -151,7 +159,7 @@ def train(cfg: TrainConfig):
         load_best_model_at_end=True,
         logging_steps=50,
         metric_for_best_model="auroc",
-        run_name=cfg.dataset + "/floor",
+        run_name=cfg.dataset + "/floor" + cfg.run_name,
         save_strategy="epoch",
         save_total_limit=1,
         tf32=True,  # Use Tensor Cores even for fp32 matmuls
@@ -204,6 +212,7 @@ def train(cfg: TrainConfig):
         if should_train:
             print("\n\033[32m===== Training weak model =====\033[0m")
             trainer.train()
+            wandb.finish()
             move_best_ckpt(trainer)
 
         print("Gathering weak labels")
@@ -241,7 +250,7 @@ def train(cfg: TrainConfig):
         strong_model.config.pad_token_id = strong_tokenizer.pad_token_id
 
         training_args.output_dir = str(root / "ceil")
-        training_args.run_name = cfg.dataset + "/ceil"
+        training_args.run_name = cfg.dataset + "/ceil" + cfg.run_name
 
         trainer = Trainer(
             args=training_args,
@@ -253,6 +262,7 @@ def train(cfg: TrainConfig):
             train_dataset=strong_train,
         )
         trainer.train()
+        wandb.finish()
         move_best_ckpt(trainer)
 
     print("\n\033[32m===== Training w2s model =====\033[0m")
@@ -273,8 +283,12 @@ def train(cfg: TrainConfig):
         train_acts = gather_hiddens(strong_model, strong_train)
         torch.save(train_acts, acts_path)
 
-    labels = knn_average(train_acts, train_probs.to(train_acts.device), 200)
-    top = torch.abs(labels - 0.5).topk(len(labels) // 2).indices
+    w2s_train = strong_train.remove_columns("labels").add_column(
+        "labels", train_probs.numpy()
+    )
+    if cfg.filtration:
+        top = zeta_filter(train_acts, train_probs.to(train_acts.device), 5, q=0.9)
+        w2s_train = w2s_train.select(top.tolist())
 
     # Check gt metrics every 100 steps during w2s training.
     # We can overfit to the weak labels before a single epoch.
@@ -283,13 +297,8 @@ def train(cfg: TrainConfig):
     training_args.save_steps = 100
 
     training_args.label_names = ["labels"]
-    training_args.output_dir = str(root / "w2s")
-    training_args.run_name = cfg.dataset + "/w2s"
-
-    w2s_train = strong_train.remove_columns("labels").add_column(
-        "labels", train_probs.numpy()
-    )
-    w2s_train = w2s_train.select(top.tolist())
+    training_args.output_dir = str(root / "w2s") + cfg.run_name
+    training_args.run_name = cfg.dataset + "/w2s" + cfg.run_name
 
     trainer = DistillationTrainer(
         args=training_args,
@@ -301,6 +310,7 @@ def train(cfg: TrainConfig):
         train_dataset=w2s_train,
     )
     trainer.train()
+    wandb.finish()
     move_best_ckpt(trainer)
 
 
