@@ -3,12 +3,14 @@ from pathlib import Path
 
 import torch
 from peft import (
+    AutoPeftModelForCausalLM,
     AutoPeftModelForSequenceClassification,
     LoraConfig,
     get_peft_model,
 )
 from simple_parsing import Serializable, field, parse
 from transformers import (
+    AutoModelForCausalLM,
     AutoModelForSequenceClassification,
     AutoTokenizer,
     DataCollatorWithPadding,
@@ -108,7 +110,6 @@ def train(cfg: TrainConfig):
             trg_out = weak_tokenizer(
                 examples["target"], truncation=True, add_special_tokens=False
             )
-            breakpoint()
             return dict(
                 input_ids=lolcat(ctx_out["input_ids"], trg_out["input_ids"]),
                 attention_mask=lolcat(
@@ -155,6 +156,7 @@ def train(cfg: TrainConfig):
         tf32=True,  # Use Tensor Cores even for fp32 matmuls
         warmup_steps=100,
         weight_decay=0.01,
+        report_to="none",
     )
 
     # Gather weak labels
@@ -167,20 +169,27 @@ def train(cfg: TrainConfig):
         should_train = True
         weak_path = root / "floor/best-ckpt"
         if not weak_path.exists():
-            weak_model = AutoModelForSequenceClassification.from_pretrained(
-                cfg.weak_name, torch_dtype="auto"
+            autoclass = (
+                AutoModelForCausalLM
+                if task == "generate"
+                else AutoModelForSequenceClassification
             )
-            # HuggingFace init for the head is too large
-            weak_model.score.weight.data *= 0.01
+            weak_model = autoclass.from_pretrained(cfg.weak_name, torch_dtype="auto")
+            if task == "classify":
+                # HuggingFace init for the head is too large
+                weak_model.score.weight.data *= 0.01
 
             weak_model = get_peft_model(weak_model, lora_cfg)
         else:
             print("Loading weak model from:", weak_path)
             should_train = False
 
-            weak_model = AutoPeftModelForSequenceClassification.from_pretrained(
-                weak_path, torch_dtype="auto"
+            autoclass = (
+                AutoPeftModelForCausalLM
+                if task == "generate"
+                else AutoPeftModelForSequenceClassification
             )
+            weak_model = autoclass.from_pretrained(weak_path, torch_dtype="auto")
 
         weak_model.config.pad_token_id = weak_tokenizer.pad_token_id
         trainer = Trainer(
