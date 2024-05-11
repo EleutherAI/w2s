@@ -151,12 +151,12 @@ def train(cfg: TrainConfig):
         load_best_model_at_end=True,
         logging_steps=50,
         metric_for_best_model="auroc",
+        run_name=cfg.dataset + "/floor",
         save_strategy="epoch",
         save_total_limit=1,
         tf32=True,  # Use Tensor Cores even for fp32 matmuls
         warmup_steps=100,
         weight_decay=0.01,
-        report_to="none",
     )
 
     # Gather weak labels
@@ -241,6 +241,8 @@ def train(cfg: TrainConfig):
         strong_model.config.pad_token_id = strong_tokenizer.pad_token_id
 
         training_args.output_dir = str(root / "ceil")
+        training_args.run_name = cfg.dataset + "/ceil"
+
         trainer = Trainer(
             args=training_args,
             compute_metrics=compute_metrics,
@@ -274,14 +276,15 @@ def train(cfg: TrainConfig):
     labels = knn_average(train_acts, train_probs.to(train_acts.device), 200)
     top = torch.abs(labels - 0.5).topk(len(labels) // 2).indices
 
-    # Check gt metrics every 50 steps during w2s training.
+    # Check gt metrics every 100 steps during w2s training.
     # We can overfit to the weak labels before a single epoch.
     training_args.evaluation_strategy = "steps"
-    training_args.eval_steps = 50
-    training_args.save_steps = 50
+    training_args.eval_steps = 100
+    training_args.save_steps = 100
 
     training_args.label_names = ["labels"]
     training_args.output_dir = str(root / "w2s")
+    training_args.run_name = cfg.dataset + "/w2s"
 
     w2s_train = strong_train.remove_columns("labels").add_column(
         "labels", train_probs.numpy()
