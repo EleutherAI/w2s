@@ -315,7 +315,6 @@ def train(cfg: TrainConfig):
     )
     trainer.train()
     wandb.finish()
-    move_best_ckpt(trainer)
 
 
 if __name__ == "__main__":
