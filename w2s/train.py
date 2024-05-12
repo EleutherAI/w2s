@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import torch
+from datasets import Value
 from peft import (
     AutoPeftModelForCausalLM,
     AutoPeftModelForSequenceClassification,
@@ -36,6 +37,9 @@ class TrainConfig(Serializable):
 
     contamination: float = field(default=0.0)
     """What fraction of data points to remove as outliers."""
+
+    minibatch_size: int = 8
+    """Size of the minibatches to use during training."""
 
     outlier_k: int = field(default=5)
     """Number of neighbors to consider when removing outliers."""
@@ -150,18 +154,25 @@ def train(cfg: TrainConfig):
     test = splits["test"].select_columns(cols)
     train = splits["train"].select_columns(cols)
 
-    weak_test = test.map(weak_processor, batched=True)
-    weak_train = train.map(weak_processor, batched=True)
+    weak_test = test.map(weak_processor, batched=True).cast_column(
+        "labels", Value("int64")
+    )
+    weak_train = train.map(weak_processor, batched=True).cast_column(
+        "labels", Value("int64")
+    )
 
     root = Path("results") / cfg.dataset
     training_args = TrainingArguments(
         str(root / "floor"),
         adam_beta2=0.95,
+        gradient_accumulation_steps=8 // cfg.minibatch_size,
         evaluation_strategy="epoch",
         label_names=["labels"],
         load_best_model_at_end=True,
         logging_steps=50,
         metric_for_best_model="auroc",
+        per_device_train_batch_size=cfg.minibatch_size,
+        per_device_eval_batch_size=cfg.minibatch_size,
         run_name=cfg.dataset + "/floor" + cfg.run_name,
         save_strategy="epoch",
         save_total_limit=1,
@@ -189,6 +200,7 @@ def train(cfg: TrainConfig):
             if task == "classify":
                 # HuggingFace init for the head is too large
                 weak_model.score.weight.data *= 0.01
+                weak_model.config.problem_type = "single_label_classification"
 
             weak_model = get_peft_model(weak_model, lora_cfg)
         else:
@@ -233,11 +245,15 @@ def train(cfg: TrainConfig):
     def strong_processor(examples):
         return strong_tokenizer(examples["txt"], truncation=True)
 
-    strong_train = train.map(strong_processor, batched=True).rename_column(
-        "hard_label", "labels"
+    strong_train = (
+        train.map(strong_processor, batched=True)
+        .rename_column("hard_label", "labels")
+        .cast_column("labels", Value("int64"))
     )
-    ceil_test = test.map(strong_processor, batched=True).rename_column(
-        "hard_label", "labels"
+    ceil_test = (
+        test.map(strong_processor, batched=True)
+        .rename_column("hard_label", "labels")
+        .cast_column("labels", Value("int64"))
     )
 
     strong_ckpt = root / "ceil" / "best-ckpt"
