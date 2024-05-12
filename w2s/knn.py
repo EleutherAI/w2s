@@ -27,6 +27,13 @@ def gather_hiddens(model: PreTrainedModel, dataset: Dataset):
     return buffer
 
 
+def cummean(x):
+    """Compute cumulative mean of `x` across the last dimension."""
+    return x.cumsum(-1) / torch.arange(
+        1, x.shape[-1] + 1, device=x.device, dtype=x.dtype
+    )
+
+
 def knn_average(x: torch.Tensor, y: torch.Tensor, k: int):
     """Compute average of `y` of `k` nearest neighbors of `x`."""
 
@@ -37,15 +44,29 @@ def knn_average(x: torch.Tensor, y: torch.Tensor, k: int):
     return y[indices].mean(1)
 
 
-def zeta_filter(x: torch.Tensor, y: torch.Tensor, k: int, q: float = 0.5):
+def zeta_filter(x: torch.Tensor, y: torch.Tensor, *, k: int = 0, q: float = 0.5):
     """Remove points whose labels are far the average of their neighbors' labels."""
 
     # Number of points to return
     n = round(q * len(x))
-    assert k > 0 and n > 0
+    assert n > 0
+
+    # All pairwise distances, leaving out the diagonal
+    dists = torch.cdist(x, x).fill_diagonal_(torch.inf)
+
+    # Choose k automatically with LOOCV if needed
+    if k < 1:
+        # Compute a prediction for each point and each value of k
+        preds = cummean(y[dists.argsort()][:, :-1])  # [n, n - 1]
+
+        # Brier score loss for each value of k
+        losses = torch.square(preds - y[:, None]).mean(0)
+
+        # Choose the best one
+        k = int(losses.argmin()) + 1
+        print(f"Chose k = {k} with LOOCV")
 
     # Find indices of `k` nearest neighbors
-    dists = torch.cdist(x, x).fill_diagonal_(torch.inf)
     indices = dists.topk(k, largest=False).indices
 
     # Compute how far each point is from its average neighbor

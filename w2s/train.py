@@ -41,7 +41,7 @@ class TrainConfig(Serializable):
     minibatch_size: int = 8
     """Size of the minibatches to use during training."""
 
-    outlier_k: int = field(default=5)
+    outlier_k: int = field(default=0)
     """Number of neighbors to consider when removing outliers."""
 
     run_name: str = ""
@@ -307,7 +307,7 @@ def train(cfg: TrainConfig):
     )
     if cfg.contamination > 0.0:
         y = train_probs.to(train_acts.device)
-        top = zeta_filter(train_acts, y, cfg.outlier_k, q=1.0 - cfg.contamination)
+        top = zeta_filter(train_acts, y, k=cfg.outlier_k, q=1.0 - cfg.contamination)
         w2s_train = w2s_train.select(top.tolist())
 
     # Check gt metrics every 100 steps during w2s training.
