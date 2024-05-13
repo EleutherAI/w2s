@@ -103,7 +103,10 @@ def load_and_process_dataset(
             ds = ds.map(
                 lambda ex: {
                     "id": hashlib.sha1(ex["txt"].encode()).hexdigest()[:8],
-                    "soft_label": [1 - float(ex["hard_label"]), float(ex["hard_label"])],
+                    "soft_label": [
+                        1 - float(ex["hard_label"]),
+                        float(ex["hard_label"]),
+                    ],
                 }
             )
         results[split] = ds
@@ -264,10 +267,10 @@ register_dataset(
 
 
 def format_ethics_deontology(ex, rng):
-    ans = "yes" if ex["label"] else "no"
+    "yes" if ex["label"] else "no"
     txt = (
         "Q: Is the following a morally valid"
-        f" excuse?\n\n{ex['scenario']}\n\n{ex['excuse']}\n\nA: {ans}"
+        f" excuse?\n\n{ex['scenario']}\n\n{ex['excuse']}\n\nA:"
     )
     return dict(txt=txt, hard_label=ex["label"])
 
@@ -282,8 +285,7 @@ register_dataset(
 
 
 def format_ethics_justice(ex, rng):
-    ans = "yes" if ex["label"] else "no"
-    txt = f"Q: Does this statement exemplify justice?\n\n{ex['scenario']}\n\nA: {ans}"
+    txt = f"Q: Does this statement exemplify justice?\n\n{ex['scenario']}\n\nA:"
     return dict(txt=txt, hard_label=ex["label"])
 
 
@@ -297,10 +299,9 @@ register_dataset(
 
 
 def format_ethics_virtue(ex, rng):
-    ans = "yes" if ex["label"] else "no"
     txt = (
         "Q: Does this behavior match the adjective that"
-        f" follows?\n\n{ex['scenario']}\n\nA: {ans}"
+        f" follows?\n\n{ex['scenario']}\n\nA:"
     )
     return dict(txt=txt, hard_label=ex["label"])
 
@@ -336,22 +337,6 @@ register_dataset(
 )
 
 
-LICHESS_N_TEST = 5000
-
-def format_lichess(ex, rng):
-    return dict(ctx=ex['ctx'], target=ex['target'])
-
-
-register_dataset(
-    "lichess",
-    DatasetConfig(
-        loader=hf_loader("EleutherAI/lichess-puzzles", n_test=LICHESS_N_TEST),  # type: ignore
-        formatter=format_lichess,  # type: ignore
-        task="generate",
-    ),
-)
-
-
 def format_mc_taco(ex, rng):
     template = "{sentence}\n\nGiven the above, {question} Is the answer {answer}?"
     return dict(txt=template.format(**ex), hard_label=ex["label"])
@@ -364,19 +349,6 @@ register_dataset(
             "mc_taco", split_names=dict(train="test", test="validation")
         ),
         formatter=format_mc_taco,  # type: ignore
-    ),
-)
-
-
-def format_amazon_polarity(ex, rng):
-    return dict(txt=f"{ex['title']} {ex['content']}", hard_label=ex["label"])
-
-
-register_dataset(
-    "amazon_polarity",
-    DatasetConfig(
-        loader=hf_loader("amazon_polarity"),  # type: ignore
-        formatter=format_amazon_polarity,  # type: ignore
     ),
 )
 
