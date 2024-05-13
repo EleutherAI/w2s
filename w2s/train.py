@@ -65,22 +65,6 @@ class DistillationTrainer(Trainer):
 
 
 class DistillationChessTrainer(Trainer):
-    # def compute_loss(self, model, inputs, return_outputs=False):
-    #     labels = inputs.pop("labels")
-    #     outputs = model(**inputs)
-    #     breakpoint()
-    #     loss = F.cross_entropy(outputs.logits[:, :-1].flatten(0, 1), labels.flatten(0, 1)[labels.flatten(0, 1) != -100])
-
-    #     return (loss, outputs) if return_outputs else loss
-
-    def compute_loss(self, model, inputs, return_outputs=False):
-        labels = inputs.pop("labels")
-        outputs = model(**inputs)
-        breakpoint()
-        loss = F.cross_entropy(outputs.logits.flatten(0, 1), labels.flatten(0, 1))
-
-        return (loss, outputs) if return_outputs else loss
-
     def evaluation_loop(
             self,
             dataloader,
@@ -158,8 +142,7 @@ def lolconst(lol, const):
 def train(cfg: TrainConfig):
     lora_cfg = LoraConfig(target_modules=LORA_MODULES)
 
-    # STRONG_NAME = "meta-llama/Meta-Llama-3-8B"
-    STRONG_NAME="Qwen/Qwen1.5-0.5B"
+    STRONG_NAME = "meta-llama/Meta-Llama-3-8B"
     strong_tokenizer = AutoTokenizer.from_pretrained(STRONG_NAME)
     weak_tokenizer = AutoTokenizer.from_pretrained(cfg.weak_name)
 
@@ -248,11 +231,16 @@ def train(cfg: TrainConfig):
         weight_decay=0.01,
         bf16_full_eval=True,
     )
+    # TODO lucia
     if task == "generate":
-        # training_args.eval_accumulation_steps = 6
         training_args.prediction_loss_only=True
-        # add custom eval script that accumulates
 
+    autoclass = (
+        AutoModelForCausalLM
+        if task == "generate"
+        else AutoModelForSequenceClassification
+    )
+    
     # Gather weak labels
     label_dir = root / "floor/preds"
     if label_dir.exists():
@@ -263,11 +251,6 @@ def train(cfg: TrainConfig):
         should_train = True
         weak_path = root / "floor/best-ckpt"
         if not weak_path.exists():
-            autoclass = (
-                AutoModelForCausalLM
-                if task == "generate"
-                else AutoModelForSequenceClassification
-            )
             weak_model = autoclass.from_pretrained(cfg.weak_name, torch_dtype="auto")
             if task == "classify":
                 # HuggingFace init for the head is too large
@@ -375,7 +358,7 @@ def train(cfg: TrainConfig):
         print(f"Strong ceiling model already exists at {strong_ckpt}")
     else:
         print("\n\033[32m===== Training strong ceiling model =====\033[0m")
-        strong_model = AutoModelForSequenceClassification.from_pretrained(
+        strong_model = autoclass.from_pretrained(
             STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
         )
         # HuggingFace init for the head is too large
@@ -423,6 +406,7 @@ def train(cfg: TrainConfig):
         if task == "generate"
         else AutoModelForSequenceClassification
     )
+    # TODO trainerclass
     
     strong_model = autoclass.from_pretrained(
         STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
