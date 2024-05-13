@@ -19,6 +19,7 @@ from transformers import (
 
 import wandb
 from w2s.ds_registry import load_and_process_dataset
+from w2s.oraclefilter import rand_filter, oracle_filter
 from w2s.knn import gather_hiddens, topofilter
 from w2s.loss import log_confidence_loss
 from w2s.roc_auc import roc_auc
@@ -44,6 +45,11 @@ class TrainConfig(Serializable):
     run_name: str = ""
     """Name of the run."""
 
+    oracle_filter: float = field(default=0.0)
+    """What fraction of misclassified data points to remove using the ground truth labels as an oracle. Happens after decontamination."""
+
+    rand_filter: float = field(default=0.0)
+    """What fraction of datapoints to randomly filter. Happens before decontamination."""
 
 class DistillationTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False):
@@ -257,10 +263,18 @@ def train(cfg: TrainConfig):
     w2s_train = strong_train.remove_columns("labels")
     w2s_train = w2s_train.add_column("labels", train_probs.numpy())
 
+    if cfg.rand_filter > 0.0:
+        retain = rand_filter(train_probs, q=1.0 - cfg.rand_filter)
+        w2s_train = w2s_train.select(retain.tolist())
     if cfg.contamination > 0.0:
         y = train_probs.to(train_acts.device)
         indices = topofilter(train_acts, y, cfg.contamination, k=cfg.outlier_k)
         w2s_train = w2s_train.select(indices)
+    if cfg.oracle_filter > 0.0:
+        y = train_probs.to(train_acts.device)
+        labels = torch.tensor(weak_train['labels']).to(train_acts.device)
+        top = oracle_filter(labels, y, q=1.0 - cfg.oracle_filter)
+        w2s_train = w2s_train.select(top.tolist())
 
     # Check gt metrics every 100 steps during w2s training.
     # We can overfit to the weak labels before a single epoch.
