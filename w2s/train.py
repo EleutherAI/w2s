@@ -14,6 +14,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
     AutoTokenizer,
+    DataCollatorForTokenClassification,
     DataCollatorWithPadding,
     Trainer,
     TrainingArguments,
@@ -144,7 +145,10 @@ def train(cfg: TrainConfig):
         if task == "generate":
             breakpoint()
             print(eval_pred)
-            raise NotImplementedError("Generation metrics not implemented")
+            return dict(
+                accuracy=predictions.argmax(dim=1).eq(labels).float().mean(),
+                loss=eval_pred.loss,
+            )
         return dict(
             accuracy=predictions.argmax(dim=1).eq(labels).float().mean(),
             auroc=roc_auc(labels, predictions[:, 1]),
@@ -180,6 +184,8 @@ def train(cfg: TrainConfig):
         warmup_steps=100,
         weight_decay=0.01,
     )
+    if task == "generate":
+        training_args.eval_accumulation_steps = 4
 
     # Gather weak labels
     label_dir = root / "floor/preds"
@@ -215,10 +221,17 @@ def train(cfg: TrainConfig):
             weak_model = autoclass.from_pretrained(weak_path, torch_dtype="auto")
 
         weak_model.config.pad_token_id = weak_tokenizer.pad_token_id
+
+        data_collator = (
+            DataCollatorForTokenClassification(weak_tokenizer)
+            if task == "generate"
+            else DataCollatorWithPadding(weak_tokenizer)
+        )
+
         trainer = Trainer(
             args=training_args,
             compute_metrics=compute_metrics,
-            data_collator=DataCollatorWithPadding(weak_tokenizer),
+            data_collator=data_collator,
             eval_dataset=weak_test,
             model=weak_model,
             tokenizer=weak_tokenizer,
@@ -234,9 +247,16 @@ def train(cfg: TrainConfig):
         train_logits = trainer.predict(weak_train).predictions
         test_logits = trainer.predict(weak_test).predictions
 
-        # Convert to probabilities, then keep only the positive probs
-        _, train_probs = torch.from_numpy(train_logits).softmax(-1).unbind(-1)
-        _, test_probs = torch.from_numpy(test_logits).softmax(-1).unbind(-1)
+        if task == "classify":
+            # Convert to probabilities, then keep only the positive probs
+            _, train_probs = torch.from_numpy(train_logits).softmax(-1).unbind(-1)
+            _, test_probs = torch.from_numpy(test_logits).softmax(-1).unbind(-1)
+        if task == "generate":
+            # Convert to hard labels
+            breakpoint()
+            train_probs = torch.from_numpy(train_logits).softmax(-1).argmax(dim=1)
+            test_probs = torch.from_numpy(test_logits).softmax(-1).argmax(dim=1)
+            print(train_probs.shape)
 
         label_dir.mkdir(parents=True, exist_ok=True)
         torch.save(train_probs, label_dir / "train.pt")
@@ -248,12 +268,16 @@ def train(cfg: TrainConfig):
     strong_train = (
         train.map(strong_processor, batched=True)
         .rename_column("hard_label", "labels")
-        .cast_column("labels", Value("int64"))
+        .cast_column(
+            "labels", Sequence(Value("int64")) if task == "generate" else Value("int64")
+        )
     )
     ceil_test = (
         test.map(strong_processor, batched=True)
         .rename_column("hard_label", "labels")
-        .cast_column("labels", Value("int64"))
+        .cast_column(
+            "labels", Sequence(Value("int64")) if task == "generate" else Value("int64")
+        )
     )
 
     strong_ckpt = root / "ceil" / "best-ckpt"
@@ -271,10 +295,16 @@ def train(cfg: TrainConfig):
         training_args.output_dir = str(root / "ceil")
         training_args.run_name = cfg.dataset + "/ceil" + cfg.run_name
 
+        data_collator = (
+            DataCollatorForTokenClassification(strong_tokenizer)
+            if task == "generate"
+            else DataCollatorWithPadding(strong_tokenizer)
+        )
+
         trainer = Trainer(
             args=training_args,
             compute_metrics=compute_metrics,
-            data_collator=DataCollatorWithPadding(strong_tokenizer),
+            data_collator=data_collator,
             eval_dataset=ceil_test,
             model=get_peft_model(strong_model, lora_cfg),
             tokenizer=strong_tokenizer,
@@ -323,7 +353,7 @@ def train(cfg: TrainConfig):
     trainer = DistillationTrainer(
         args=training_args,
         compute_metrics=compute_metrics,
-        data_collator=DataCollatorWithPadding(strong_tokenizer),
+        data_collator=data_collator,
         eval_dataset=ceil_test,
         model=get_peft_model(strong_model, lora_cfg),
         tokenizer=strong_tokenizer,

@@ -45,7 +45,8 @@ def knn_average(x: torch.Tensor, y: torch.Tensor, k: int):
 
 
 def zeta_filter(x: torch.Tensor, y: torch.Tensor, *, k: int = 0, q: float = 0.5):
-    """Remove points whose labels are far the average of their neighbors' labels."""
+    """Remove points whose labels are far from the average of their neighbors'
+    labels."""
 
     # Number of points to return
     n = round(q * len(x))
