@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 import numpy as np
 from datasets import Sequence, Value
 from peft import (
@@ -66,13 +67,19 @@ class DistillationTrainer(Trainer):
 class DistillationChessTrainer(Trainer):
     # def compute_loss(self, model, inputs, return_outputs=False):
     #     labels = inputs.pop("labels")
-
     #     outputs = model(**inputs)
-    #     frac = self.state.global_step / self.state.max_steps
     #     breakpoint()
-    #     loss = log_confidence_loss(outputs.logits, labels, frac)
+    #     loss = F.cross_entropy(outputs.logits[:, :-1].flatten(0, 1), labels.flatten(0, 1)[labels.flatten(0, 1) != -100])
 
     #     return (loss, outputs) if return_outputs else loss
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        labels = inputs.pop("labels")
+        outputs = model(**inputs)
+        breakpoint()
+        loss = F.cross_entropy(outputs.logits.flatten(0, 1), labels.flatten(0, 1))
+
+        return (loss, outputs) if return_outputs else loss
 
     def evaluation_loop(
             self,
@@ -406,6 +413,7 @@ def train(cfg: TrainConfig):
             )
     
         trainer.train()
+        breakpoint()
         wandb.finish()
         move_best_ckpt(trainer)
 
