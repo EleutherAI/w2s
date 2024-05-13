@@ -78,30 +78,40 @@ class DistillationChessTrainer(Trainer):
             self,
             dataloader,
             description,
-            prediction_loss_only: bool,
             ignore_keys,
             metric_key_prefix,
         ) -> EvalLoopOutput:
         model = self._wrap_model(self.model, training=False, dataloader=dataloader)
+        args = self.args
+        
+        if not self.is_in_train:
+            if args.fp16_full_eval:
+                model = model.to(dtype=torch.float16, device=args.device)
+            elif args.bf16_full_eval:
+                model = model.to(dtype=torch.bfloat16, device=args.device)
+        model.eval()
         eval_dataset = getattr(dataloader, "dataset", [])
         num_samples = len(eval_dataset)
 
         running_mean_loss = 0.0
         running_mean_acc = 0.0
+        predictions = []
         for _, inputs in enumerate(dataloader):
-            breakpoint()
             loss, logits, labels = self.prediction_step(model, inputs, False, ignore_keys=ignore_keys)
+            mask = labels != -100
+            batch_predictions = logits[mask].argmax(dim=-1) # type: ignore
+            predictions.append(batch_predictions.cpu().numpy())
+
             running_mean_loss += (loss.item() / len(dataloader)) # type: ignore
-            running_mean_acc += logits.argmax(dim=1).eq(labels).float().mean().item() / len(dataloader) # type: ignore
+            running_mean_acc += batch_predictions.eq(labels[mask]).float().mean().item() / len(dataloader) # type: ignore
 
         metrics = dict(
             eval_accuracy=running_mean_acc,
             eval_loss=running_mean_loss
         )
-        print(metrics.keys())
-        breakpoint()
-
-        return EvalLoopOutput(predictions=np.array([]), label_ids=np.array([]), metrics=metrics, num_samples=num_samples)
+        predictions=np.concatenate(predictions, axis=0)
+        
+        return EvalLoopOutput(predictions=predictions, label_ids=np.array([]), metrics=metrics, num_samples=num_samples)
     
 
 # Works for both Llama and Qwen architectures
@@ -186,7 +196,6 @@ def train(cfg: TrainConfig):
         return out
 
     def compute_metrics(eval_pred):
-        breakpoint()
         predictions, labels = map(torch.from_numpy, eval_pred)
         if task == "generate":
             print(eval_pred)
@@ -241,8 +250,8 @@ def train(cfg: TrainConfig):
     label_dir = root / "floor/preds"
     if label_dir.exists():
         print(f"Loading weak labels from {label_dir}")
-        train_probs = torch.load(label_dir / "train.pt")
-        test_probs = torch.load(label_dir / "test.pt")
+        train_labels = torch.load(label_dir / "train.pt")
+        test_labels = torch.load(label_dir / "test.pt")
     else:
         should_train = True
         weak_path = root / "floor/best-ckpt"
@@ -310,20 +319,33 @@ def train(cfg: TrainConfig):
 
         if task == "classify":
             # Convert to probabilities, then keep only the positive probs
-            _, train_probs = torch.from_numpy(train_logits).softmax(-1).unbind(-1)
-            _, test_probs = torch.from_numpy(test_logits).softmax(-1).unbind(-1)
+            _, train_labels = torch.from_numpy(train_logits).softmax(-1).unbind(-1)
+            _, test_labels = torch.from_numpy(test_logits).softmax(-1).unbind(-1)
         if task == "generate":
             # Convert to hard labels
-            breakpoint()
-            train_probs = torch.from_numpy(train_logits).softmax(-1).argmax(dim=1)
-            test_probs = torch.from_numpy(test_logits).softmax(-1).argmax(dim=1)
-            print(train_probs.shape)
+            train_labels = torch.from_numpy(train_logits)
+            test_labels = torch.from_numpy(test_logits)
 
         label_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(train_probs, label_dir / "train.pt")
-        torch.save(test_probs, label_dir / "test.pt")
+        torch.save(train_labels, label_dir / "train.pt")
+        torch.save(test_labels, label_dir / "test.pt")
 
     def strong_processor(examples):
+        if task == "generate":
+            ctx_out = strong_tokenizer(examples["ctx"], truncation=True)
+            trg_out = strong_tokenizer(
+                examples["target"], truncation=True, add_special_tokens=False
+            )
+            return dict(
+                input_ids=lolcat(ctx_out["input_ids"], trg_out["input_ids"]),
+                attention_mask=lolcat(
+                    ctx_out["attention_mask"], trg_out["attention_mask"]
+                ),
+                hard_label=lolcat(
+                    lolconst(ctx_out["input_ids"], -100), trg_out["input_ids"]
+                ),
+            )
+
         return strong_tokenizer(examples["txt"], truncation=True)
 
     strong_train = (
@@ -388,7 +410,13 @@ def train(cfg: TrainConfig):
         move_best_ckpt(trainer)
 
     print("\n\033[32m===== Training w2s model =====\033[0m")
-    strong_model = AutoModelForSequenceClassification.from_pretrained(
+    autoclass = (
+        AutoModelForCausalLM
+        if task == "generate"
+        else AutoModelForSequenceClassification
+    )
+    
+    strong_model = autoclass.from_pretrained(
         STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
     )
     # HuggingFace init for the head is too large
@@ -406,10 +434,10 @@ def train(cfg: TrainConfig):
         torch.save(train_acts, acts_path)
 
     w2s_train = strong_train.remove_columns("labels").add_column(
-        "labels", train_probs.numpy()
+        "labels", train_labels.numpy()
     )
     if cfg.contamination > 0.0:
-        y = train_probs.to(train_acts.device)
+        y = train_labels.to(train_acts.device)
         top = zeta_filter(train_acts, y, k=cfg.outlier_k, q=1.0 - cfg.contamination)
         w2s_train = w2s_train.select(top.tolist())
 
