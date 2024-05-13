@@ -1,5 +1,7 @@
+import numpy as np
 import torch
 from datasets import Dataset
+from scipy.sparse.csgraph import connected_components
 from tqdm.auto import tqdm
 from transformers import (
     PretrainedConfig,
@@ -7,6 +9,57 @@ from transformers import (
 )
 
 from .utils import assert_type
+
+
+def lcc_mask(adj: torch.Tensor):
+    """Mask for membership in the largest connected component"""
+    num_cmps, cmps = connected_components(adj.cpu(), connection="strong")
+    cmp_sizes = np.bincount(cmps, minlength=num_cmps)
+    return torch.from_numpy(cmps == cmp_sizes.argmax()).to(adj.device)
+
+
+def topo_cc(x: torch.Tensor, y: torch.Tensor, *, k: int = 5):
+    """TopoCC label filtering algorithm."""
+    # All pairwise distances, leaving out the diagonal
+    dists = torch.cdist(x, x).fill_diagonal_(torch.inf)
+
+    # Find indices of `k` nearest neighbors
+    indices = dists.topk(k, largest=False).indices
+
+    # Create kNN adjacency matrix
+    adj = indices.new_zeros(len(x), len(x), dtype=torch.bool)
+    adj.scatter_(1, indices, True)
+
+    cls_mask = y[:, None] > 0.5
+    pos_mask = lcc_mask(adj & cls_mask)
+    neg_mask = lcc_mask(adj & ~cls_mask)
+    return neg_mask | pos_mask
+
+
+def topofilter(
+    x: torch.Tensor, y: torch.Tensor, contamination: float = 0.1, *, k: int = 5
+):
+    """Remove points whose labels are far the average of their neighbors' labels."""
+
+    C = topo_cc(x, y, k=k)
+    x_C, y_C = x[C], y[C]
+
+    # Zeta filtering
+    dists = torch.cdist(x_C, x_C).fill_diagonal_(torch.inf)
+    indices = dists.topk(k, largest=False).indices
+
+    # Compute how far each point is from its average neighbor
+    knn_labels = y_C[indices].float().mean(1)
+    dists = torch.abs(y_C - knn_labels)
+
+    # Remove points that are furthest from their average neighbor
+    cc_removed = len(x) - len(x_C)
+    remaining = round(len(x) * contamination) - cc_removed
+    n = max(remaining, 0)
+
+    filtered = dists.topk(n).indices.cpu()
+    C_indices = C.nonzero().squeeze(1).cpu()
+    return np.delete(C_indices, filtered)
 
 
 @torch.no_grad()
@@ -42,6 +95,36 @@ def knn_average(x: torch.Tensor, y: torch.Tensor, k: int):
 
     # Compute average of `y` of `k` nearest neighbors
     return y[indices].mean(1)
+
+
+def knn_relabel(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    # All pairwise distances, leaving out the diagonal
+    dists = torch.cdist(x, x).fill_diagonal_(torch.inf)
+
+    # Compute a prediction for each point and each value of k
+    preds = cummean(y[dists.argsort()][:, :-1])  # [n, n - 1]
+
+    # Brier score loss for each value of k
+    losses = torch.square(preds - y[:, None]).mean(0)
+
+    # Choose the best one
+    k = int(losses.argmin())
+    print(f"Chose k = {k + 1} with LOOCV")
+
+    return preds[:, k]
+
+
+def local_outlier_factor(X, k):
+    # Calculate pairwise squared Euclidean distances
+    dist = torch.cdist(X, X).fill_diagonal_(torch.inf)
+    distances, indices = dist.topk(k, largest=False)
+
+    # Calculate reachability distances
+    k_dists = distances[:, -1, None].expand_as(distances)
+    lrd = torch.max(distances, k_dists).mean(dim=1).reciprocal()
+
+    lrd_ratios = lrd[indices] / lrd[:, None]
+    return lrd_ratios.sum(dim=1) / k
 
 
 def zeta_filter(x: torch.Tensor, y: torch.Tensor, *, k: int = 0, q: float = 0.5):
