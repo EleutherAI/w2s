@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import torch
-from datasets import Value
+from datasets import Sequence, Value
 from peft import (
     AutoPeftModelForCausalLM,
     AutoPeftModelForSequenceClassification,
@@ -155,10 +155,10 @@ def train(cfg: TrainConfig):
     train = splits["train"].select_columns(cols)
 
     weak_test = test.map(weak_processor, batched=True).cast_column(
-        "labels", Value("int64")
+        "labels", Sequence(Value("int64")) if task == "generate" else Value("int64")
     )
     weak_train = train.map(weak_processor, batched=True).cast_column(
-        "labels", Value("int64")
+        "labels", Sequence(Value("int64")) if task == "generate" else Value("int64")
     )
 
     root = Path("results") / cfg.dataset
