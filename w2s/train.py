@@ -1,9 +1,8 @@
 from dataclasses import dataclass
 from pathlib import Path
+import copy
 
 import torch
-import torch.nn.functional as F
-import numpy as np
 from datasets import Sequence, Value
 from peft import (
     AutoPeftModelForCausalLM,
@@ -21,8 +20,6 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
-from transformers.trainer_utils import EvalLoopOutput
-from transformers.trainer_pt_utils import find_batch_size
 
 import wandb
 
@@ -63,47 +60,6 @@ class DistillationTrainer(Trainer):
 
         return (loss, outputs) if return_outputs else loss
 
-
-class DistillationChessTrainer(Trainer):
-    def evaluation_loop(
-            self,
-            dataloader,
-            description,
-            ignore_keys,
-            metric_key_prefix,
-        ) -> EvalLoopOutput:
-        model = self._wrap_model(self.model, training=False, dataloader=dataloader)
-        args = self.args
-        
-        if not self.is_in_train:
-            if args.fp16_full_eval:
-                model = model.to(dtype=torch.float16, device=args.device)
-            elif args.bf16_full_eval:
-                model = model.to(dtype=torch.bfloat16, device=args.device)
-        model.eval()
-        eval_dataset = getattr(dataloader, "dataset", [])
-        num_samples = len(eval_dataset)
-
-        running_mean_loss = 0.0
-        running_mean_acc = 0.0
-        predictions = []
-        for _, inputs in enumerate(dataloader):
-            loss, logits, labels = self.prediction_step(model, inputs, False, ignore_keys=ignore_keys)
-            mask = labels != -100
-            batch_predictions = logits[mask].argmax(dim=-1) # type: ignore
-            predictions.append(batch_predictions.cpu().numpy())
-
-            running_mean_loss += (loss.item() / len(dataloader)) # type: ignore
-            running_mean_acc += batch_predictions.eq(labels[mask]).float().mean().item() / len(dataloader) # type: ignore
-
-        metrics = dict(
-            eval_accuracy=running_mean_acc,
-            eval_loss=running_mean_loss
-        )
-        predictions=np.concatenate(predictions, axis=0)
-        
-        return EvalLoopOutput(predictions=predictions, label_ids=np.array([]), metrics=metrics, num_samples=num_samples)
-    
 
 # Works for both Llama and Qwen architectures
 LORA_MODULES = [
@@ -188,19 +144,19 @@ def train(cfg: TrainConfig):
     def compute_metrics(eval_pred):
         predictions, labels = map(torch.from_numpy, eval_pred)
         if task == "generate":
-            print(eval_pred)
+            # generation hard labels are packed into a tensor
+            predictions = unpad_sequences(predictions, padding_value=-100)
             return dict(
-                accuracy=predictions.argmax(dim=1).eq(labels).float().mean(),
-                loss=eval_pred.loss,
+                accuracy=torch.cat([row.eq(labels[i][labels[i] != -100]) for i, row in enumerate(predictions)]).float().mean()
             )
         return dict(
-            accuracy=predictions.argmax(dim=1).eq(labels).float().mean(),
+            accuracy=predictions.argmax(dim=1).eq(labels[labels != -100]).float().mean(),
             auroc=roc_auc(labels, predictions[:, 1]),
         )
 
     cols = ["ctx", "target"] if task == "generate" else ["hard_label", "txt"]
-    test = splits["test"].select(range(100)).select_columns(cols)
-    train = splits["train"].select(range(200)).select_columns(cols)
+    test = splits["test"].select_columns(cols)
+    train = splits["train"].select_columns(cols)
 
     weak_test = test.map(weak_processor, batched=True).cast_column(
         "labels", Sequence(Value("int64")) if task == "generate" else Value("int64")
@@ -215,8 +171,6 @@ def train(cfg: TrainConfig):
         adam_beta2=0.95,
         gradient_accumulation_steps=8 // cfg.minibatch_size,
         evaluation_strategy="epoch",
-        # evaluation_strategy="steps",
-        # eval_steps=5,
         label_names=["labels"],
         load_best_model_at_end=True,
         logging_steps=50,
@@ -231,15 +185,31 @@ def train(cfg: TrainConfig):
         weight_decay=0.01,
         bf16_full_eval=True,
     )
-    # TODO lucia
-    if task == "generate":
-        training_args.prediction_loss_only=True
-
     autoclass = (
         AutoModelForCausalLM
         if task == "generate"
         else AutoModelForSequenceClassification
     )
+    def pad_sequences(sequences: list[torch.Tensor], padding_value: int = 0):
+        """Pad a list of sequences to a common length."""
+        max_len = max(map(len, sequences))
+        buffer = sequences[0].new_full((len(sequences), max_len), padding_value)
+
+        for i, seq in enumerate(sequences):
+            buffer[i, :len(seq)] = seq
+        
+        return buffer
+
+    def unpad_sequences(sequences: torch.Tensor, padding_value: int = 0):
+        """Remove padding from a padded sequence."""
+        return [
+            seq[seq != padding_value]
+            for seq in sequences
+        ]
+
+    def preprocess_logits_for_metrics(logits, labels):
+        rows = [row[labels[i] != -100].argmax(-1) for i, row in enumerate(logits)]
+        return pad_sequences(rows, padding_value=-100)
     
     # Gather weak labels
     label_dir = root / "floor/preds"
@@ -278,7 +248,7 @@ def train(cfg: TrainConfig):
         )
 
         if task == "generate":
-            trainer = DistillationChessTrainer(
+            trainer = Trainer(
                 args=training_args,
                 compute_metrics=compute_metrics,
                 data_collator=data_collator,
@@ -286,6 +256,7 @@ def train(cfg: TrainConfig):
                 model=weak_model,
                 tokenizer=weak_tokenizer,
                 train_dataset=weak_train,
+                preprocess_logits_for_metrics=preprocess_logits_for_metrics,
             )
         else:
             trainer = DistillationTrainer(
@@ -311,11 +282,12 @@ def train(cfg: TrainConfig):
             # Convert to probabilities, then keep only the positive probs
             _, train_labels = torch.from_numpy(train_logits).softmax(-1).unbind(-1)
             _, test_labels = torch.from_numpy(test_logits).softmax(-1).unbind(-1)
-        if task == "generate":
+        else:
             # Convert to hard labels
-            train_labels = torch.from_numpy(train_logits)
-            test_labels = torch.from_numpy(test_logits)
-
+            # logits are actually packed and filtered predictions
+            train_labels = unpad_sequences(torch.from_numpy(train_logits), padding_value=-100)
+            test_labels = unpad_sequences(torch.from_numpy(test_logits), padding_value=-100)
+        
         label_dir.mkdir(parents=True, exist_ok=True)
         torch.save(train_labels, label_dir / "train.pt")
         torch.save(test_labels, label_dir / "test.pt")
@@ -362,7 +334,8 @@ def train(cfg: TrainConfig):
             STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
         )
         # HuggingFace init for the head is too large
-        strong_model.score.weight.data *= 0.01
+        if task == "classify":
+            strong_model.score.weight.data *= 0.01
         strong_model.config.pad_token_id = strong_tokenizer.pad_token_id
 
         training_args.output_dir = str(root / "ceil")
@@ -375,7 +348,7 @@ def train(cfg: TrainConfig):
         )
 
         if task == "generate":
-            trainer = DistillationChessTrainer(
+            trainer = Trainer(
                 args=training_args,
                 compute_metrics=compute_metrics,
                 data_collator=data_collator,
@@ -383,6 +356,7 @@ def train(cfg: TrainConfig):
                 model=get_peft_model(strong_model, lora_cfg),
                 tokenizer=strong_tokenizer,
                 train_dataset=strong_train,
+                preprocess_logits_for_metrics=preprocess_logits_for_metrics,
             )
         else:
             trainer = DistillationTrainer(
@@ -406,13 +380,13 @@ def train(cfg: TrainConfig):
         if task == "generate"
         else AutoModelForSequenceClassification
     )
-    # TODO trainerclass
     
     strong_model = autoclass.from_pretrained(
         STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
     )
     # HuggingFace init for the head is too large
-    strong_model.score.weight.data *= 0.01
+    if task == "classify":
+        strong_model.score.weight.data *= 0.01
     strong_model.config.pad_token_id = strong_tokenizer.pad_token_id
 
     # Weak to strong generalization
@@ -425,10 +399,15 @@ def train(cfg: TrainConfig):
         train_acts = gather_hiddens(strong_model, strong_train)
         torch.save(train_acts, acts_path)
 
-    w2s_train = strong_train.remove_columns("labels").add_column(
-        "labels", train_labels.numpy()
-    )
-    if cfg.contamination > 0.0:
+    if task == "generate":
+        labels = copy.deepcopy(strong_train["labels"])
+        for i, row in enumerate(labels):
+            row[-len(train_labels[i]):] = train_labels[i].tolist()
+        w2s_train = strong_train.remove_columns("labels").add_column("labels", labels)
+    else:
+        w2s_train = strong_train.remove_columns("labels").add_column("labels", train_labels.numpy()) # type: ignore
+    
+    if cfg.contamination > 0.0 and task == "classify":
         y = train_labels.to(train_acts.device)
         top = zeta_filter(train_acts, y, k=cfg.outlier_k, q=1.0 - cfg.contamination)
         w2s_train = w2s_train.select(top.tolist())
@@ -442,9 +421,15 @@ def train(cfg: TrainConfig):
     training_args.label_names = ["labels"]
     training_args.output_dir = str(root / "w2s") + cfg.run_name
     training_args.run_name = cfg.dataset + "/w2s" + cfg.run_name
-
+    
+    data_collator = (
+        DataCollatorForTokenClassification(strong_tokenizer)
+        if task == "generate"
+        else DataCollatorWithPadding(strong_tokenizer)
+    )
+    
     if task == "generate":
-        trainer = DistillationChessTrainer(
+        trainer = Trainer(
             args=training_args,
             compute_metrics=compute_metrics,
             data_collator=data_collator,
@@ -452,8 +437,9 @@ def train(cfg: TrainConfig):
             model=get_peft_model(strong_model, lora_cfg),
             tokenizer=strong_tokenizer,
             train_dataset=w2s_train,
+            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
-    else:
+    if task == "classify":
         trainer = DistillationTrainer(
             args=training_args,
             compute_metrics=compute_metrics,
