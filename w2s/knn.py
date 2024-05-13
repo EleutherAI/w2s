@@ -37,11 +37,14 @@ def topo_cc(x: torch.Tensor, y: torch.Tensor, *, k: int = 5):
 
 
 def topofilter(
-    x: torch.Tensor, y: torch.Tensor, contamination: float = 0.1, *, k: int = 5
+    x: torch.Tensor, y: torch.Tensor, contamination: float = 0.1, *, k: int = 5, k_cc: int = None
 ):
     """Remove points whose labels are far the average of their neighbors' labels."""
 
-    C = topo_cc(x, y, k=k)
+    if k_cc is None:
+        k_cc = k
+
+    C = topo_cc(x, y, k=k_cc)
     x_C, y_C = x[C], y[C]
 
     # Zeta filtering
