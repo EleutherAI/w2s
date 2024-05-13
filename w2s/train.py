@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import torch
+import numpy as np
 from datasets import Sequence, Value
 from peft import (
     AutoPeftModelForCausalLM,
@@ -19,6 +20,8 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+from transformers.trainer_utils import EvalLoopOutput
+from transformers.trainer_pt_utils import find_batch_size
 
 import wandb
 
@@ -60,6 +63,47 @@ class DistillationTrainer(Trainer):
         return (loss, outputs) if return_outputs else loss
 
 
+class DistillationChessTrainer(Trainer):
+    # def compute_loss(self, model, inputs, return_outputs=False):
+    #     labels = inputs.pop("labels")
+
+    #     outputs = model(**inputs)
+    #     frac = self.state.global_step / self.state.max_steps
+    #     breakpoint()
+    #     loss = log_confidence_loss(outputs.logits, labels, frac)
+
+    #     return (loss, outputs) if return_outputs else loss
+
+    def evaluation_loop(
+            self,
+            dataloader,
+            description,
+            prediction_loss_only: bool,
+            ignore_keys,
+            metric_key_prefix,
+        ) -> EvalLoopOutput:
+        model = self._wrap_model(self.model, training=False, dataloader=dataloader)
+        eval_dataset = getattr(dataloader, "dataset", [])
+        num_samples = len(eval_dataset)
+
+        running_mean_loss = 0.0
+        running_mean_acc = 0.0
+        for _, inputs in enumerate(dataloader):
+            breakpoint()
+            loss, logits, labels = self.prediction_step(model, inputs, False, ignore_keys=ignore_keys)
+            running_mean_loss += (loss.item() / len(dataloader)) # type: ignore
+            running_mean_acc += logits.argmax(dim=1).eq(labels).float().mean().item() / len(dataloader) # type: ignore
+
+        metrics = dict(
+            eval_accuracy=running_mean_acc,
+            eval_loss=running_mean_loss
+        )
+        print(metrics.keys())
+        breakpoint()
+
+        return EvalLoopOutput(predictions=np.array([]), label_ids=np.array([]), metrics=metrics, num_samples=num_samples)
+    
+
 # Works for both Llama and Qwen architectures
 LORA_MODULES = [
     "gate_proj",
@@ -97,7 +141,8 @@ def lolconst(lol, const):
 def train(cfg: TrainConfig):
     lora_cfg = LoraConfig(target_modules=LORA_MODULES)
 
-    STRONG_NAME = "meta-llama/Meta-Llama-3-8B"
+    # STRONG_NAME = "meta-llama/Meta-Llama-3-8B"
+    STRONG_NAME="Qwen/Qwen1.5-0.5B"
     strong_tokenizer = AutoTokenizer.from_pretrained(STRONG_NAME)
     weak_tokenizer = AutoTokenizer.from_pretrained(cfg.weak_name)
 
@@ -141,9 +186,9 @@ def train(cfg: TrainConfig):
         return out
 
     def compute_metrics(eval_pred):
+        breakpoint()
         predictions, labels = map(torch.from_numpy, eval_pred)
         if task == "generate":
-            breakpoint()
             print(eval_pred)
             return dict(
                 accuracy=predictions.argmax(dim=1).eq(labels).float().mean(),
@@ -155,8 +200,8 @@ def train(cfg: TrainConfig):
         )
 
     cols = ["ctx", "target"] if task == "generate" else ["hard_label", "txt"]
-    test = splits["test"].select_columns(cols)
-    train = splits["train"].select_columns(cols)
+    test = splits["test"].select(range(100)).select_columns(cols)
+    train = splits["train"].select(range(200)).select_columns(cols)
 
     weak_test = test.map(weak_processor, batched=True).cast_column(
         "labels", Sequence(Value("int64")) if task == "generate" else Value("int64")
@@ -171,10 +216,12 @@ def train(cfg: TrainConfig):
         adam_beta2=0.95,
         gradient_accumulation_steps=8 // cfg.minibatch_size,
         evaluation_strategy="epoch",
+        # evaluation_strategy="steps",
+        # eval_steps=5,
         label_names=["labels"],
         load_best_model_at_end=True,
         logging_steps=50,
-        metric_for_best_model="auroc",
+        metric_for_best_model="auroc" if task == "classify" else "accuracy",
         per_device_train_batch_size=cfg.minibatch_size,
         per_device_eval_batch_size=cfg.minibatch_size,
         run_name=cfg.dataset + "/floor" + cfg.run_name,
@@ -183,9 +230,12 @@ def train(cfg: TrainConfig):
         tf32=True,  # Use Tensor Cores even for fp32 matmuls
         warmup_steps=100,
         weight_decay=0.01,
+        bf16_full_eval=True,
     )
     if task == "generate":
-        training_args.eval_accumulation_steps = 4
+        # training_args.eval_accumulation_steps = 6
+        training_args.prediction_loss_only=True
+        # add custom eval script that accumulates
 
     # Gather weak labels
     label_dir = root / "floor/preds"
@@ -228,15 +278,26 @@ def train(cfg: TrainConfig):
             else DataCollatorWithPadding(weak_tokenizer)
         )
 
-        trainer = Trainer(
-            args=training_args,
-            compute_metrics=compute_metrics,
-            data_collator=data_collator,
-            eval_dataset=weak_test,
-            model=weak_model,
-            tokenizer=weak_tokenizer,
-            train_dataset=weak_train,
-        )
+        if task == "generate":
+            trainer = DistillationChessTrainer(
+                args=training_args,
+                compute_metrics=compute_metrics,
+                data_collator=data_collator,
+                eval_dataset=weak_test,
+                model=weak_model,
+                tokenizer=weak_tokenizer,
+                train_dataset=weak_train,
+            )
+        else:
+            trainer = DistillationTrainer(
+                args=training_args,
+                compute_metrics=compute_metrics,
+                data_collator=data_collator,
+                eval_dataset=weak_test,
+                model=weak_model,
+                tokenizer=weak_tokenizer,
+                train_dataset=weak_train,
+            )
         if should_train:
             print("\n\033[32m===== Training weak model =====\033[0m")
             trainer.train()
@@ -301,15 +362,27 @@ def train(cfg: TrainConfig):
             else DataCollatorWithPadding(strong_tokenizer)
         )
 
-        trainer = Trainer(
-            args=training_args,
-            compute_metrics=compute_metrics,
-            data_collator=data_collator,
-            eval_dataset=ceil_test,
-            model=get_peft_model(strong_model, lora_cfg),
-            tokenizer=strong_tokenizer,
-            train_dataset=strong_train,
-        )
+        if task == "generate":
+            trainer = DistillationChessTrainer(
+                args=training_args,
+                compute_metrics=compute_metrics,
+                data_collator=data_collator,
+                eval_dataset=ceil_test,
+                model=get_peft_model(strong_model, lora_cfg),
+                tokenizer=strong_tokenizer,
+                train_dataset=strong_train,
+            )
+        else:
+            trainer = DistillationTrainer(
+                args=training_args,
+                compute_metrics=compute_metrics,
+                data_collator=data_collator,
+                eval_dataset=ceil_test,
+                model=get_peft_model(strong_model, lora_cfg),
+                tokenizer=strong_tokenizer,
+                train_dataset=strong_train,
+            )
+    
         trainer.train()
         wandb.finish()
         move_best_ckpt(trainer)
@@ -350,15 +423,26 @@ def train(cfg: TrainConfig):
     training_args.output_dir = str(root / "w2s") + cfg.run_name
     training_args.run_name = cfg.dataset + "/w2s" + cfg.run_name
 
-    trainer = DistillationTrainer(
-        args=training_args,
-        compute_metrics=compute_metrics,
-        data_collator=data_collator,
-        eval_dataset=ceil_test,
-        model=get_peft_model(strong_model, lora_cfg),
-        tokenizer=strong_tokenizer,
-        train_dataset=w2s_train,
-    )
+    if task == "generate":
+        trainer = DistillationChessTrainer(
+            args=training_args,
+            compute_metrics=compute_metrics,
+            data_collator=data_collator,
+            eval_dataset=ceil_test,
+            model=get_peft_model(strong_model, lora_cfg),
+            tokenizer=strong_tokenizer,
+            train_dataset=w2s_train,
+        )
+    else:
+        trainer = DistillationTrainer(
+            args=training_args,
+            compute_metrics=compute_metrics,
+            data_collator=data_collator,
+            eval_dataset=ceil_test,
+            model=get_peft_model(strong_model, lora_cfg),
+            tokenizer=strong_tokenizer,
+            train_dataset=w2s_train,
+        )
     trainer.train()
     wandb.finish()
 
