@@ -15,6 +15,7 @@ dependencies = [
     "peft",
     "simple-parsing",
     "scipy",
+    "concept_erasure",
     # 4.0 introduced the breaking change of using return_dict=True by default
     "transformers>=4.0.0",
 ]

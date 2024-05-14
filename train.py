@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Literal
 
 import torch
+from concept_erasure import LeaceEraser
 from datasets import Value
 from peft import (
     AutoPeftModelForCausalLM,
@@ -217,7 +218,7 @@ def train(cfg: TrainConfig):
             )
             weak_model = autoclass.from_pretrained(weak_path, torch_dtype="auto")
 
-        weak_model.config.pad_token_id = weak_tokenizer.pad_token_id
+        weak_model.config.pad_token_id = weak_tokenizer.pad_token_id  # type: ignore
         trainer = Trainer(
             args=training_args,
             compute_metrics=compute_metrics,
@@ -318,9 +319,16 @@ def train(cfg: TrainConfig):
         jac_idxs = torch.randint(0, train_acts.shape[0], (d_jacobian,))
         jac = train_acts[jac_idxs, :].to(train_probs.dtype)
 
-        train_grads = torch.sign(y - 0.5)[:, None] * train_acts
+        sign_y = torch.sign(y - 0.5)[:, None]
+        train_grads = sign_y * train_acts
         kernel_grads = train_grads @ jac.T
-        embeddings = kernel_grads
+
+        # leace away sign_y
+        eraser = LeaceEraser.fit(x=kernel_grads, z=sign_y)
+        embeddings = eraser(x=kernel_grads)
+    elif cfg.embedding_type == "kernel-grads":
+        # grab downsampled jacobians and gradients -> jvps
+        raise NotImplementedError("Not implemented")
     elif cfg.embedding_type == "acts":
         embeddings = train_acts
     else:
