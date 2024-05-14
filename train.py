@@ -22,7 +22,7 @@ from transformers import (
 import wandb
 from w2s.ds_registry import load_and_process_dataset
 from w2s.grads import get_kernel_grads
-from w2s.knn import gather_hiddens, topofilter
+from w2s.knn import gather_hiddens, topo_cc_auto
 from w2s.loss import log_confidence_loss
 from w2s.roc_auc import roc_auc
 
@@ -40,9 +40,6 @@ class TrainConfig(Serializable):
 
     minibatch_size: int = 8
     """Size of the minibatches to use during training."""
-
-    outlier_k: int = field(default=0)
-    """Number of neighbors to consider when removing outliers."""
 
     run_name: str = ""
     """Name of the run."""
@@ -295,7 +292,7 @@ def train(cfg: TrainConfig):
         raise ValueError(f"Unknown embedding type: {cfg.embedding_type}")
 
     if cfg.contamination > 0.0:
-        indices = topofilter(embeddings, y, cfg.contamination, k=20)
+        indices = topo_cc_auto(embeddings, y, cfg.contamination)
         w2s_train = w2s_train.select(indices)
 
     # Check gt metrics every 100 steps during w2s training.

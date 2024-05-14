@@ -36,6 +36,36 @@ def topo_cc(x: torch.Tensor, y: torch.Tensor, *, k: int = 5):
     return neg_mask | pos_mask
 
 
+def topo_cc_auto(x: torch.Tensor, y: torch.Tensor, contamination: float):
+    """TopoCC label filtering algorithm."""
+    # All pairwise distances, leaving out the diagonal
+    dists = torch.cdist(x, x).fill_diagonal_(torch.inf)
+    indices = dists.argsort()
+
+    # Binary search to find the appropriate k
+    lo, hi = 0, len(x) - 1
+    while lo < hi:
+        k = (lo + hi) // 2
+
+        # Create kNN adjacency matrix
+        adj = indices.new_zeros(len(x), len(x), dtype=torch.bool)
+        adj.scatter_(1, indices[:, :k], True)
+
+        cls_mask = y[:, None] > 0.5
+        pos_mask = lcc_mask(adj & cls_mask)
+        neg_mask = lcc_mask(adj & ~cls_mask)
+
+        frac = 1.0 - torch.mean(neg_mask | pos_mask, dtype=x.dtype)
+        print(f"lo={lo}, hi={hi}, k={k}, frac={frac}")
+
+        if frac < contamination:
+            hi = k
+        else:
+            lo = k + 1
+
+    return neg_mask | pos_mask  # type: ignore
+
+
 def topofilter(
     x: torch.Tensor, y: torch.Tensor, contamination: float = 0.1, *, k: int = 5
 ):
