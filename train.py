@@ -208,42 +208,55 @@ def train(cfg: TrainConfig):
         .cast_column("labels", Value("int64"))
     )
 
-    strong_model = AutoModelForSequenceClassification.from_pretrained(
-        STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
-    )
-    # HuggingFace init for the head is too large
-    strong_model.score.weight.data *= 0.01
-    strong_model.config.pad_token_id = strong_tokenizer.pad_token_id
-
-    training_args.output_dir = str(root / "ceil")
-    training_args.run_name = cfg.dataset + "/ceil" + cfg.run_name
-
-    ceil_trainer = Trainer(
-        args=training_args,
-        compute_metrics=compute_metrics,
-        data_collator=DataCollatorWithPadding(strong_tokenizer),
-        eval_dataset=ceil_test,
-        model=get_peft_model(strong_model, lora_cfg),
-        tokenizer=strong_tokenizer,
-        train_dataset=strong_train,
-    )
-
     strong_ckpt = root / "ceil" / "best-ckpt"
     if strong_ckpt.exists():
         print(f"Strong ceiling model already exists at {strong_ckpt}")
     else:
         print("\n\033[32m===== Training strong ceiling model =====\033[0m")
+        strong_model = AutoModelForSequenceClassification.from_pretrained(
+            STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
+        )
+        # HuggingFace init for the head is too large
+        strong_model.score.weight.data *= 0.01
+        strong_model.config.pad_token_id = strong_tokenizer.pad_token_id
+
+        training_args.output_dir = str(root / "ceil")
+        training_args.run_name = cfg.dataset + "/ceil" + cfg.run_name
+
+        ceil_trainer = Trainer(
+            args=training_args,
+            compute_metrics=compute_metrics,
+            data_collator=DataCollatorWithPadding(strong_tokenizer),
+            eval_dataset=ceil_test,
+            model=get_peft_model(strong_model, lora_cfg),
+            tokenizer=strong_tokenizer,
+            train_dataset=strong_train,
+        )
+
         ceil_trainer.train()
         wandb.finish()
         move_best_ckpt(ceil_trainer)
 
-    strong_predictions_path = root / "ceil/preds"
+    strong_predictions_path = root / "ceil/preds/test.pt"
     if strong_predictions_path.exists():
         print(f"Loading strong predictions from {strong_predictions_path}")
         strong_train_probs = torch.load(strong_predictions_path / "train.pt")
         strong_test_probs = torch.load(strong_predictions_path / "test.pt")
     else:
         print("Gathering strong predictions")
+        strong_model = AutoModelForSequenceClassification.from_pretrained(
+            root / "ceil" / "best-ckpt", torch_dtype="auto", device_map={"": "cuda"}
+        )
+        strong_model.config.pad_token_id = strong_tokenizer.pad_token_id
+        ceil_trainer = Trainer(
+            args=training_args,
+            compute_metrics=compute_metrics,
+            data_collator=DataCollatorWithPadding(strong_tokenizer),
+            eval_dataset=ceil_test,
+            model=get_peft_model(strong_model, lora_cfg),
+            tokenizer=strong_tokenizer,
+            train_dataset=strong_train,
+        )
         strong_train_logits = ceil_trainer.predict(strong_train).predictions
         strong_test_logits = ceil_trainer.predict(ceil_test).predictions
 
