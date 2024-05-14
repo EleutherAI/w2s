@@ -237,15 +237,17 @@ def train(cfg: TrainConfig):
         wandb.finish()
         move_best_ckpt(ceil_trainer)
 
-    strong_predictions_path = root / "ceil/preds/test.pt"
+    strong_predictions_path = root / "ceil/preds"
     if strong_predictions_path.exists():
         print(f"Loading strong predictions from {strong_predictions_path}")
         strong_train_probs = torch.load(strong_predictions_path / "train.pt")
         strong_test_probs = torch.load(strong_predictions_path / "test.pt")
     else:
         print("Gathering strong predictions")
-        strong_model = AutoModelForSequenceClassification.from_pretrained(
-            root / "ceil" / "best-ckpt", torch_dtype="auto", device_map={"": "cuda"}
+        strong_model = AutoPeftModelForSequenceClassification.from_pretrained(
+            str(root / "ceil" / "best-ckpt"),
+            torch_dtype="auto",
+            device_map={"": "cuda"},
         )
         strong_model.config.pad_token_id = strong_tokenizer.pad_token_id
         ceil_trainer = Trainer(
@@ -253,7 +255,7 @@ def train(cfg: TrainConfig):
             compute_metrics=compute_metrics,
             data_collator=DataCollatorWithPadding(strong_tokenizer),
             eval_dataset=ceil_test,
-            model=get_peft_model(strong_model, lora_cfg),
+            model=strong_model,
             tokenizer=strong_tokenizer,
             train_dataset=strong_train,
         )
