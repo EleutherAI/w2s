@@ -282,7 +282,9 @@ def train(cfg: TrainConfig):
         embeddings = eraser(x=kernel_grads)
     elif cfg.embedding_type == "kernel-grads":
         # grab downsampled jacobians and gradients -> jvps
-        kernel_grads = get_kernel_grads(strong_model, strong_train, d_jacobian=20)
+        kernel_grads = get_kernel_grads(
+            strong_model, strong_train, d_jacobian=20
+        ).float()
 
         # leace away sign_y
         eraser = LeaceEraser.fit(x=kernel_grads, z=(y > 0.5).float())
