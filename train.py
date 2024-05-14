@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import torch
 from datasets import Value
@@ -20,11 +21,10 @@ from transformers import (
 )
 
 import wandb
-
-from .ds_registry import load_and_process_dataset
-from .knn import gather_hiddens, topofilter
-from .loss import log_confidence_loss
-from .roc_auc import roc_auc
+from w2s.ds_registry import load_and_process_dataset
+from w2s.knn import gather_hiddens, topofilter
+from w2s.loss import log_confidence_loss
+from w2s.roc_auc import roc_auc
 
 
 @dataclass
@@ -46,6 +46,9 @@ class TrainConfig(Serializable):
 
     run_name: str = ""
     """Name of the run."""
+
+    embedding_type: Literal["acts", "probe-kernel-grads"] = "acts"
+    """Type of embeddings to use for the weak-to-strong model."""
 
 
 class DistillationTrainer(Trainer):
@@ -305,9 +308,26 @@ def train(cfg: TrainConfig):
     w2s_train = strong_train.remove_columns("labels")
     w2s_train = w2s_train.add_column("labels", train_probs.numpy())
 
+    y = train_probs.to(train_acts.device)
+    if cfg.embedding_type == "probe-kernel-grads":
+        # f(x; theta, b) = x @ theta + b  (R^n -> R)
+        # grad loss = grad |f - y| = sign(y - f) * x
+        # jacobian = grad f = x
+        # kernel grad = x_test @ sign(y - f) * x_train
+        d_jacobian = 1000
+        jac_idxs = torch.randint(0, train_acts.shape[0], (d_jacobian,))
+        jac = train_acts[jac_idxs, :].to(train_probs.dtype)
+
+        train_grads = torch.sign(y - 0.5)[:, None] * train_acts
+        kernel_grads = train_grads @ jac.T
+        embeddings = kernel_grads
+    elif cfg.embedding_type == "acts":
+        embeddings = train_acts
+    else:
+        raise ValueError(f"Unknown embedding type: {cfg.embedding_type}")
+
     if cfg.contamination > 0.0:
-        y = train_probs.to(train_acts.device)
-        indices = topofilter(train_acts, y, cfg.contamination, k=20)
+        indices = topofilter(embeddings, y, cfg.contamination, k=20)
         w2s_train = w2s_train.select(indices)
 
     # Check gt metrics every 100 steps during w2s training.
