@@ -19,7 +19,7 @@ from transformers import (
 
 import wandb
 from w2s.ds_registry import load_and_process_dataset
-from w2s.knn import gather_hiddens, topofilter
+from w2s.knn import gather_hiddens
 from w2s.loss import log_confidence_loss
 from w2s.roc_auc import roc_auc
 
@@ -144,8 +144,8 @@ def train(cfg: TrainConfig):
     label_dir = root / "floor/preds"
     if label_dir.exists():
         print(f"Loading weak labels from {label_dir}")
-        train_probs = torch.load(label_dir / "train.pt")
-        test_probs = torch.load(label_dir / "test.pt")
+        weak_train_probs = torch.load(label_dir / "train.pt")
+        weak_test_probs = torch.load(label_dir / "test.pt")
     else:
         should_train = True
         weak_path = root / "floor/best-ckpt"
@@ -166,7 +166,7 @@ def train(cfg: TrainConfig):
                 weak_path, torch_dtype="auto"
             )
 
-        weak_model.config.pad_token_id = weak_tokenizer.pad_token_id
+        weak_model.config.pad_token_id = weak_tokenizer.pad_token_id  # type: ignore
         trainer = Trainer(
             args=training_args,
             compute_metrics=compute_metrics,
@@ -183,16 +183,16 @@ def train(cfg: TrainConfig):
             move_best_ckpt(trainer)
 
         print("Gathering weak labels")
-        train_logits = trainer.predict(weak_train).predictions
-        test_logits = trainer.predict(weak_test).predictions
+        weak_train_logits = trainer.predict(weak_train).predictions
+        weak_test_logits = trainer.predict(weak_test).predictions
 
         # Convert to probabilities, then keep only the positive probs
-        _, train_probs = torch.from_numpy(train_logits).softmax(-1).unbind(-1)
-        _, test_probs = torch.from_numpy(test_logits).softmax(-1).unbind(-1)
+        _, weak_train_probs = torch.from_numpy(weak_train_logits).softmax(-1).unbind(-1)
+        _, weak_test_probs = torch.from_numpy(weak_test_logits).softmax(-1).unbind(-1)
 
         label_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(train_probs, label_dir / "train.pt")
-        torch.save(test_probs, label_dir / "test.pt")
+        torch.save(weak_train_probs, label_dir / "train.pt")
+        torch.save(weak_test_probs, label_dir / "test.pt")
 
     def strong_processor(examples):
         return strong_tokenizer(examples["txt"], truncation=True)
@@ -208,35 +208,6 @@ def train(cfg: TrainConfig):
         .cast_column("labels", Value("int64"))
     )
 
-    strong_ckpt = root / "ceil" / "best-ckpt"
-    if strong_ckpt.exists():
-        print(f"Strong ceiling model already exists at {strong_ckpt}")
-    else:
-        print("\n\033[32m===== Training strong ceiling model =====\033[0m")
-        strong_model = AutoModelForSequenceClassification.from_pretrained(
-            STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
-        )
-        # HuggingFace init for the head is too large
-        strong_model.score.weight.data *= 0.01
-        strong_model.config.pad_token_id = strong_tokenizer.pad_token_id
-
-        training_args.output_dir = str(root / "ceil")
-        training_args.run_name = cfg.dataset + "/ceil" + cfg.run_name
-
-        trainer = Trainer(
-            args=training_args,
-            compute_metrics=compute_metrics,
-            data_collator=DataCollatorWithPadding(strong_tokenizer),
-            eval_dataset=ceil_test,
-            model=get_peft_model(strong_model, lora_cfg),
-            tokenizer=strong_tokenizer,
-            train_dataset=strong_train,
-        )
-        trainer.train()
-        wandb.finish()
-        move_best_ckpt(trainer)
-
-    print("\n\033[32m===== Training w2s model =====\033[0m")
     strong_model = AutoModelForSequenceClassification.from_pretrained(
         STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
     )
@@ -244,6 +215,50 @@ def train(cfg: TrainConfig):
     strong_model.score.weight.data *= 0.01
     strong_model.config.pad_token_id = strong_tokenizer.pad_token_id
 
+    training_args.output_dir = str(root / "ceil")
+    training_args.run_name = cfg.dataset + "/ceil" + cfg.run_name
+
+    ceil_trainer = Trainer(
+        args=training_args,
+        compute_metrics=compute_metrics,
+        data_collator=DataCollatorWithPadding(strong_tokenizer),
+        eval_dataset=ceil_test,
+        model=get_peft_model(strong_model, lora_cfg),
+        tokenizer=strong_tokenizer,
+        train_dataset=strong_train,
+    )
+
+    strong_ckpt = root / "ceil" / "best-ckpt"
+    if strong_ckpt.exists():
+        print(f"Strong ceiling model already exists at {strong_ckpt}")
+    else:
+        print("\n\033[32m===== Training strong ceiling model =====\033[0m")
+        ceil_trainer.train()
+        wandb.finish()
+        move_best_ckpt(ceil_trainer)
+
+    strong_predictions_path = root / "ceil/preds"
+    if strong_predictions_path.exists():
+        print(f"Loading strong predictions from {strong_predictions_path}")
+        strong_train_probs = torch.load(strong_predictions_path / "train.pt")
+        strong_test_probs = torch.load(strong_predictions_path / "test.pt")
+    else:
+        print("Gathering strong predictions")
+        strong_train_logits = ceil_trainer.predict(strong_train).predictions
+        strong_test_logits = ceil_trainer.predict(ceil_test).predictions
+
+        _, strong_train_probs = (
+            torch.from_numpy(strong_train_logits).softmax(-1).unbind(-1)
+        )
+        _, strong_test_probs = (
+            torch.from_numpy(strong_test_logits).softmax(-1).unbind(-1)
+        )
+
+        strong_predictions_path.mkdir(parents=True, exist_ok=True)
+        torch.save(strong_train_probs, strong_predictions_path / "train.pt")
+        torch.save(strong_test_probs, strong_predictions_path / "test.pt")
+
+    print("\n\033[32m===== Training w2s model =====\033[0m")
     # Weak to strong generalization
     acts_path = root / "ceil/acts.pt"
     if acts_path.exists():
@@ -255,11 +270,17 @@ def train(cfg: TrainConfig):
         torch.save(train_acts, acts_path)
 
     w2s_train = strong_train.remove_columns("labels")
-    w2s_train = w2s_train.add_column("labels", train_probs.numpy())
+    w2s_train = w2s_train.add_column("labels", weak_train_probs.numpy())
 
     if cfg.contamination > 0.0:
-        y = train_probs.to(train_acts.device)
-        indices = topofilter(train_acts, y, cfg.contamination, k=cfg.outlier_k)
+        weak_y = weak_train_probs.to(train_acts.device)
+        strong_y = strong_train_probs.to(train_acts.device)
+        indices = (
+            (weak_y - strong_y)
+            .abs()
+            .topk(int(len(weak_y) * (1 - cfg.contamination)), largest=False)
+            .indices
+        )
         w2s_train = w2s_train.select(indices)
 
     # Check gt metrics every 100 steps during w2s training.

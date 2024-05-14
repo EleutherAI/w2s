@@ -25,12 +25,7 @@ class DatasetConfig:
     loader: Callable[[str], HfDataset]
     # formats items to have keys 'txt' and 'hard_label', takes a random.Random rng
     # (or for generative tasks, 'ctx' and 'target', and no 'hard_label' key)
-    # deprecated OAI legacy:
-    # optionally also adds the key 'choices', a pair of strings, indicating to use the
-    # lm head
     formatter: Callable[[Any], Any]
-    # "classify" or "generate"
-    task: str = "classify"
 
 
 # mapping from dataset name to load function and format function
@@ -81,34 +76,23 @@ def load_and_process_dataset(
         ds = cfg.loader(split).shuffle(seed=seed)
         ds = ds.map(functools.partial(cfg.formatter, rng=Random(seed)))  # type: ignore
 
-        if cfg.task == "generate":
-            ds = ds.filter(lambda ex: ex["ctx"] != "")  # remove empty texts
-            ds = ds.filter(lambda ex: ex["target"] != "")
-        else:
-            ds = ds.filter(lambda ex: ex["txt"] != "")  # remove empty texts
-            ds = balance(ds, seed)  # balance to 50/50
+        ds = ds.filter(lambda ex: ex["txt"] != "")  # remove empty texts
+        ds = balance(ds, seed)  # balance to 50/50
 
         try:
             ds = ds.select(range(n_docs))
         except IndexError:
             print(f"{ds_name} has < {n_docs} docs after balancing, using all {len(ds)}")
 
-        if cfg.task == "generate":
-            ds = ds.map(
-                lambda ex: {
-                    "id": hashlib.sha1(ex["ctx"].encode()).hexdigest()[:8],
-                }
-            )
-        else:
-            ds = ds.map(
-                lambda ex: {
-                    "id": hashlib.sha1(ex["txt"].encode()).hexdigest()[:8],
-                    "soft_label": [
-                        1 - float(ex["hard_label"]),
-                        float(ex["hard_label"]),
-                    ],
-                }
-            )
+        ds = ds.map(
+            lambda ex: {
+                "id": hashlib.sha1(ex["txt"].encode()).hexdigest()[:8],
+                "soft_label": [
+                    1 - float(ex["hard_label"]),
+                    float(ex["hard_label"]),
+                ],
+            }
+        )
         results[split] = ds
 
     if take_test_from_train:
@@ -166,11 +150,6 @@ def tokenize_dataset(
         out = dict(
             input_ids=toks["input_ids"],
         )
-
-        if "choices" in ex:
-            choice_toks = [encode_choice(c, tokenizer) for c in ex["choices"]]
-            out["choice_input_ids"] = choice_toks
-
         return out
 
     ds = raw_ds.map(process_function, batched=False)
@@ -413,7 +392,8 @@ def format_openbookqa(ex, rng):
     choices = [
         f"{a}) {t}" for a, t in zip(ex["choices"]["label"], ex["choices"]["text"])
     ]
-    txt = f"Q: {ex['question_stem']}\n\nChoices:\n{'\n'.join(choices)}\n\nAnswer: {ans}"
+    joined_choices = "\n".join(choices)
+    txt = f"Q: {ex['question_stem']}\n\nChoices:\n{joined_choices}\n\nAnswer: {ans}"
     return dict(txt=txt, hard_label=hard_label)
 
 
@@ -603,52 +583,6 @@ register_dataset(
     DatasetConfig(
         loader=hf_loader("sciq", n_test=SCIQ_N_TEST),  # type: ignore
         formatter=format_sciq,  # type: ignore
-    ),
-)
-
-
-def format_sciq_for_lm_head(ex, rng):
-    hard_label = int(rng.random() < 0.5)
-    if hard_label:
-        ans = ex["correct_answer"]
-    else:
-        ans = rng.choice([ex["distractor1"], ex["distractor2"], ex["distractor3"]])
-
-    txt = f"Q: {ex['question']} A: {ans}. Is this correct?"
-    choices = (" No", " Yes")
-    return dict(txt=txt, hard_label=hard_label, choices=choices)
-
-
-register_dataset(
-    "sciq_for_lm_head",
-    DatasetConfig(
-        loader=hf_loader("sciq", n_test=SCIQ_N_TEST),  # type: ignore
-        formatter=format_sciq_for_lm_head,  # type: ignore
-    ),
-)
-
-
-def format_sciq_for_lm_head_with_support(ex, rng):
-    # from https://github.com/EleutherAI/elk-generalization
-    template = (
-        "Name: Bob\n\nPassage 1:\n{support}\n\nQ1: "
-        '"{question}" Is the answer "{answer}"?\nA:'
-    )
-    choices = (" No", " Yes")
-    hard_label = int(rng.random() < 0.5)
-    if hard_label:
-        ans = ex["correct_answer"]
-    else:
-        ans = rng.choice([ex["distractor1"], ex["distractor2"], ex["distractor3"]])
-    txt = template.format(support=ex["support"], question=ex["question"], answer=ans)
-    return dict(txt=txt, hard_label=hard_label, choices=choices)
-
-
-register_dataset(
-    "sciq_for_lm_head_with_support",
-    DatasetConfig(
-        loader=hf_loader("sciq", n_test=SCIQ_N_TEST),  # type: ignore
-        formatter=format_sciq_for_lm_head_with_support,  # type: ignore
     ),
 )
 
