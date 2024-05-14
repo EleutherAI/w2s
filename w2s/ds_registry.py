@@ -357,18 +357,25 @@ def get_top_moves(moves, k=3):
 
 
 def format_lichess(ex, rng):
-    answer = rng.choice(['A', 'B'])
-    target_move = ex['target'].strip()
-    alternative_moves = [move for move in get_top_moves(ex['ctx'], k=3) if move != target_move]
+    hard_label = int(rng.random() < 0.5)
 
-    binarized = (
-        f"{ex['ctx']}\n"
-        "Which move is optimal?\n"  
-        f"A: {target_move if answer == 'A' else alternative_moves[0]}\n"
-        f"B: {alternative_moves[0] if answer == 'A' else target_move}\n"
+    target_move = ex['target'].strip()
+    alternative_moves = [move for move in get_top_moves(ex['ctx'], k=2) if move != target_move]
+    choices = [target_move, alternative_moves[0]]
+    rng.shuffle(choices)
+
+    correct = choices.index(target_move)
+    response = correct if hard_label else 1 - correct
+
+    txt = (
+        "Find the best move. Previous moves:"
+        f"\n{ex['ctx']}\n"
+        f"\n1) {choices[0]}"
+        f"\n2) {choices[1]}"
+        f"\nA: {response + 1}"
     )
 
-    return dict(ctx=binarized, target=answer)
+    return dict(txt=txt, hard_label=hard_label)
 
 
 register_dataset(
@@ -376,7 +383,7 @@ register_dataset(
     DatasetConfig(
         loader=hf_loader("EleutherAI/lichess-puzzles", n_test=LICHESS_N_TEST),  # type: ignore
         formatter=format_lichess,  # type: ignore
-        task="generate",
+        task="classify",
     ),
 )
 
