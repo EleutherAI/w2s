@@ -19,7 +19,7 @@ from transformers import (
 
 import wandb
 from w2s.ds_registry import load_and_process_dataset
-from w2s.knn import gather_hiddens, zeta_filter
+from w2s.knn import gather_hiddens, topofilter
 from w2s.loss import log_confidence_loss
 from w2s.roc_auc import roc_auc
 
@@ -254,13 +254,13 @@ def train(cfg: TrainConfig):
         train_acts = gather_hiddens(strong_model, strong_train)
         torch.save(train_acts, acts_path)
 
-    w2s_train = strong_train.remove_columns("labels").add_column(
-        "labels", train_probs.numpy()
-    )
+    w2s_train = strong_train.remove_columns("labels")
+    w2s_train = w2s_train.add_column("labels", train_probs.numpy())
+
     if cfg.contamination > 0.0:
         y = train_probs.to(train_acts.device)
-        top = zeta_filter(train_acts, y, k=cfg.outlier_k, q=1.0 - cfg.contamination)
-        w2s_train = w2s_train.select(top.tolist())
+        indices = topofilter(train_acts, y, cfg.contamination, k=cfg.outlier_k)
+        w2s_train = w2s_train.select(indices)
 
     # Check gt metrics every 100 steps during w2s training.
     # We can overfit to the weak labels before a single epoch.
