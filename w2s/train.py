@@ -189,6 +189,11 @@ def train(cfg: TrainConfig):
         if task == "generate"
         else AutoModelForSequenceClassification
     )
+    collatorclass = (
+        DataCollatorForTokenClassification
+        if task == "generate"
+        else DataCollatorWithPadding
+    )
     def pad_sequences(sequences: list[torch.Tensor], padding_value: int = 0):
         """Pad a list of sequences to a common length."""
         max_len = max(map(len, sequences))
@@ -240,12 +245,8 @@ def train(cfg: TrainConfig):
 
         weak_model.config.pad_token_id = weak_tokenizer.pad_token_id
 
-        data_collator = (
-            DataCollatorForTokenClassification(weak_tokenizer)
-            if task == "generate"
-            else DataCollatorWithPadding(weak_tokenizer)
-        )
-
+        data_collator = collatorclass(weak_tokenizer)
+          
         if task == "generate":
             trainer = Trainer(
                 args=training_args,
@@ -340,11 +341,7 @@ def train(cfg: TrainConfig):
         training_args.output_dir = str(root / "ceil")
         training_args.run_name = cfg.dataset + "/ceil" + cfg.run_name
 
-        data_collator = (
-            DataCollatorForTokenClassification(strong_tokenizer)
-            if task == "generate"
-            else DataCollatorWithPadding(strong_tokenizer)
-        )
+        data_collator = collatorclass(strong_tokenizer)
 
         if task == "generate":
             trainer = Trainer(
@@ -374,11 +371,6 @@ def train(cfg: TrainConfig):
         move_best_ckpt(trainer)
 
     print("\n\033[32m===== Training w2s model =====\033[0m")
-    autoclass = (
-        AutoModelForCausalLM
-        if task == "generate"
-        else AutoModelForSequenceClassification
-    )
     
     strong_model = autoclass.from_pretrained(
         STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
@@ -421,17 +413,11 @@ def train(cfg: TrainConfig):
     training_args.output_dir = str(root / "w2s") + cfg.run_name
     training_args.run_name = cfg.dataset + "/w2s" + cfg.run_name
     
-    data_collator = (
-        DataCollatorForTokenClassification(strong_tokenizer)
-        if task == "generate"
-        else DataCollatorWithPadding(strong_tokenizer)
-    )
-    
     if task == "generate":
         trainer = Trainer(
             args=training_args,
             compute_metrics=compute_metrics,
-            data_collator=data_collator,
+            data_collator=collatorclass(strong_tokenizer),
             eval_dataset=ceil_test,
             model=get_peft_model(strong_model, lora_cfg),
             tokenizer=strong_tokenizer,
@@ -442,7 +428,7 @@ def train(cfg: TrainConfig):
         trainer = DistillationTrainer(
             args=training_args,
             compute_metrics=compute_metrics,
-            data_collator=data_collator,
+            data_collator=collatorclass(strong_tokenizer),
             eval_dataset=ceil_test,
             model=get_peft_model(strong_model, lora_cfg),
             tokenizer=strong_tokenizer,
