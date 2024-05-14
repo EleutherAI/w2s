@@ -18,11 +18,10 @@ from transformers import (
 )
 
 import wandb
-
-from .ds_registry import load_and_process_dataset
-from .knn import gather_hiddens, zeta_filter
-from .loss import log_confidence_loss
-from .roc_auc import roc_auc
+from w2s.ds_registry import load_and_process_dataset
+from w2s.knn import gather_hiddens, zeta_filter
+from w2s.loss import log_confidence_loss
+from w2s.roc_auc import roc_auc
 
 
 @dataclass

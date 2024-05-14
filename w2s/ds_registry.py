@@ -253,7 +253,7 @@ def format_dream(ex, rng):
 
         ans = rng.choice(distractors)
 
-    txt = f"Q: {ex['question']} A: {ans}"
+    txt = f"{ex['dialogue']}\n\nQ: {ex['question']} A: {ans}"
     return dict(txt=txt, hard_label=hard_label)
 
 
@@ -410,7 +410,10 @@ def format_openbookqa(ex, rng):
         del distractors[letters.index(ex["answerKey"])]
         ans = rng.choice(distractors)
 
-    txt = f"Q: {ex['question_stem']}\n\nA: {ans}"
+    choices = [
+        f"{a}) {t}" for a, t in zip(ex["choices"]["label"], ex["choices"]["text"])
+    ]
+    txt = f"Q: {ex['question_stem']}\n\nChoices:\n{'\n'.join(choices)}\n\nAnswer: {ans}"
     return dict(txt=txt, hard_label=hard_label)
 
 

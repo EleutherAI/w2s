@@ -13,9 +13,11 @@ dependencies = [
     "datasets",
     "torch",
     "peft",
+    "scipy",
     "simple-parsing",
     # 4.0 introduced the breaking change of using return_dict=True by default
     "transformers>=4.0.0",
+    "wandb",
 ]
 version = "0.0.1"
 
