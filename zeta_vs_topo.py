@@ -1,18 +1,29 @@
 
 import os
 import torch
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+
+from simple_parsing import Serializable, field, parse, list_field
 
 from w2s.ds_registry import load_and_process_dataset, _REGISTRY
 from w2s.knn import gather_hiddens, topofilter
 from w2s.roc_auc import roc_auc
 
-RES_DIR = "/mnt/ssd-1/nora/w2s/results/"
-OUT_DIR = "/mnt/ssd-1/adam/w2s/results/"
 
-def main():
+@dataclass
+class RunConfig(Serializable):
+    kcc: list[int] = list_field(10, 20, 50)
+    kzeta: int = field(default=20)
+    resuser: str = field(default='nora')
+    outuser: str = field(default='adam')
+
+
+def main(cfg: RunConfig):
+    RES_DIR = f"/mnt/ssd-1/{cfg.resuser}/w2s/results/"
+    OUT_DIR = f"/mnt/ssd-1/{cfg.outuser}/w2s/results/"
 
     datasets = os.listdir(RES_DIR)
 
@@ -26,9 +37,13 @@ def main():
     print(datasets)
 
     for ds_name in datasets:
-        scan_topo(ds_name)
+        scan_topo(ds_name, cfg)
 
-def scan_topo(ds_name):
+
+def scan_topo(ds_name, cfg):
+    RES_DIR = f"/mnt/ssd-1/{cfg.resuser}/w2s/results/"
+    OUT_DIR = f"/mnt/ssd-1/{cfg.outuser}/w2s/results/"
+
     print(f"Scanning {ds_name}")
     print(f"Loading dataset {ds_name}")
     splits = load_and_process_dataset(ds_name, split_sizes=dict(train=20_000, test=1_000))
@@ -50,33 +65,32 @@ def scan_topo(ds_name):
     gt = torch.tensor(train['hard_label']).to(acts.device).to(torch.float)
     wk = y.to(acts.device).to(torch.float)
 
-    k = 20
-    
     print('==================== ' + ds_name + ' ====================')
     
     print(f"ROC AUC, Acc unfiltered:\t {roc_auc(gt, wk)} \t {((wk > 0.5) == gt).to(torch.float).mean()}")
 
-    aucs, accs = [], []
-
-    ks = range(2, 62, 2)
+    aucs, accs, fracs = [], [], []
     good_ks = []
 
-    for k_cc in ks:
-        #print(f"Topo filtering with k={k} and k_cc={k_cc}")
-        indices = topofilter(acts, y, contamination, k=k, k_cc=k_cc)
+    print(f"Scanning k_CC: {cfg.kcc}")
+    print(f"With k_Zeta: {cfg.kzeta}")
+
+    for k_cc in cfg.kcc:
+        indices = topofilter(acts, y, contamination, k=cfg.kzeta, k_cc=k_cc)
 
         auc = roc_auc(gt[indices], wk[indices])
         acc = ((wk[indices] > 0.5) == gt[indices]).to(torch.float).mean()
 
+        frac = indices.shape[-1] / y.shape[-1]
+        # if indices.shape[-1] < (.99 - contamination) * y.shape[-1]:
+        #     print(f"ROC AUC, Acc filtered k_CC={k_cc}:\t {auc} \t {acc} \t {indices.shape[-1] / y.shape[-1]} \t SKIPPED.", flush=True)
+        # else:
+        aucs.append(auc.cpu().item())
+        accs.append(acc.cpu().item())
+        fracs.append(frac)
+        good_ks.append(k_cc)
 
-        if indices.shape[-1] < (.99 - contamination) * y.shape[-1]:
-            print(f"ROC AUC, Acc filtered k_CC={k_cc}:\t {auc} \t {acc} \t {indices.shape[-1] / y.shape[-1]} \t SKIPPED.", flush=True)
-        else:
-            aucs.append(auc.cpu().item())
-            accs.append(acc.cpu().item())
-            good_ks.append(k_cc)
-
-            print(f"ROC AUC, Acc filtered k_CC={k_cc}:\t {auc} \t {acc} \t {indices.shape[-1] / y.shape[-1]}", flush=True)
+        print(f"ROC AUC, Acc, frac filtered k_CC={k_cc}:\t {auc} \t {acc} \t {frac}", flush=True)
 
     # make and save plot
 
@@ -85,13 +99,21 @@ def scan_topo(ds_name):
     plt.xlabel('k_CC')
     # plt.xscale('log')
     plt.ylabel('Performance')
-    plt.title(f'ds = {ds_name}, k_Topo = {k}')
+    plt.title(f'ds = {ds_name}, k_Zeta = {cfg.kzeta}')
     plt.legend()
-    plt.savefig(OUT_DIR + f"topo_filter_{ds_name}.png")
+    plt.savefig(OUT_DIR + f"topo_filter_perf_{ds_name}.png")
+    plt.clf()
+
+    plt.plot(good_ks, fracs, label='frac kept')
+    plt.xlabel('k_CC')
+    # plt.xscale('log')
+    plt.ylabel('Fraction of points kept')
+    plt.title(f'ds = {ds_name}, k_Zeta = {cfg.kzeta}')
+    plt.savefig(OUT_DIR + f"topo_filter_frac_{ds_name}.png")
     plt.clf()
     
     return
 
 
 if __name__ == "__main__":
-    main()
+    main(parse(RunConfig))

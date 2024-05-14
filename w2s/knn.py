@@ -20,8 +20,16 @@ def lcc_mask(adj: torch.Tensor):
 
 def topo_cc(x: torch.Tensor, y: torch.Tensor, *, k: int = 5):
     """TopoCC label filtering algorithm."""
+    if k == -1:
+        # Use all points
+        return torch.ones(len(x), dtype=torch.bool)
+
     # All pairwise distances, leaving out the diagonal
     dists = torch.cdist(x, x).fill_diagonal_(torch.inf)
+
+    if dists.shape[0] < k:
+        print(f"Warning: Not enough points for k={k} in TopoCC, using all {dists.shape[0]}.")
+        k = dists.shape[0]
 
     # Find indices of `k` nearest neighbors
     indices = dists.topk(k, largest=False).indices
@@ -49,6 +57,10 @@ def topofilter(
 
     # Zeta filtering
     dists = torch.cdist(x_C, x_C).fill_diagonal_(torch.inf)
+    if dists.shape[0] < k:
+        print(f"Warning: Not enough points for k={k} in ZetaFilter, using all {dists.shape[0]} from CC.")
+        k = dists.shape[0]
+
     indices = dists.topk(k, largest=False).indices
 
     # Compute how far each point is from its average neighbor
