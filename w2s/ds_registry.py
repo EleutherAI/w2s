@@ -4,6 +4,9 @@ from collections import Counter
 from dataclasses import dataclass
 from random import Random
 from typing import Any, Callable
+import re
+import chess
+import chess.engine
 
 from datasets import (
     Dataset as HfDataset,
@@ -79,6 +82,11 @@ def load_and_process_dataset(
     results = {}
     for split, n_docs in split_sizes.items():
         ds = cfg.loader(split).shuffle(seed=seed)
+        try:
+            ds = ds.select(range(n_docs))
+        except IndexError:
+            print(f"{ds_name} has < {n_docs} docs after balancing, using all {len(ds)}")
+
         ds = ds.map(functools.partial(cfg.formatter, rng=Random(seed)))  # type: ignore
 
         if cfg.task == "generate":
@@ -88,10 +96,6 @@ def load_and_process_dataset(
             ds = ds.filter(lambda ex: ex["txt"] != "")  # remove empty texts
             ds = balance(ds, seed)  # balance to 50/50
 
-        try:
-            ds = ds.select(range(n_docs))
-        except IndexError:
-            print(f"{ds_name} has < {n_docs} docs after balancing, using all {len(ds)}")
 
         if cfg.task == "generate":
             ds = ds.map(
@@ -338,8 +342,33 @@ register_dataset(
 
 LICHESS_N_TEST = 5000
 
+# Matches <digit>. and <digit>...
+pattern = re.compile(r'\d+\.\.\.|\d+\.')
+engine = chess.engine.SimpleEngine.popen_uci('/usr/games/stockfish')
+
+
+def get_top_moves(moves, k=3):
+        board = chess.Board()
+        for move in re.sub(pattern, '', moves).split():
+            board.push_san(move)
+
+        info = engine.analyse(board, chess.engine.Limit(depth=3), multipv=k)
+        return [board.san(item['pv'][0]) for item in info] # type: ignore
+
+
 def format_lichess(ex, rng):
-    return dict(ctx=ex['ctx'], target=ex['target'])
+    answer = rng.choice(['A', 'B'])
+    target_move = ex['target'].strip()
+    alternative_moves = [move for move in get_top_moves(ex['ctx'], k=3) if move != target_move]
+
+    binarized = (
+        f"{ex['ctx']}\n"
+        "Which move is optimal?\n"  
+        f"A: {target_move if answer == 'A' else alternative_moves[0]}\n"
+        f"B: {alternative_moves[0] if answer == 'A' else target_move}\n"
+    )
+
+    return dict(ctx=binarized, target=answer)
 
 
 register_dataset(

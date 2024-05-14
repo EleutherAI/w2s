@@ -183,7 +183,6 @@ def train(cfg: TrainConfig):
         tf32=True,  # Use Tensor Cores even for fp32 matmuls
         warmup_steps=100,
         weight_decay=0.01,
-        bf16_full_eval=True,
     )
     autoclass = (
         AutoModelForCausalLM
