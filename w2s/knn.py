@@ -102,46 +102,6 @@ def cummean(x):
     )
 
 
-def knn_average(x: torch.Tensor, y: torch.Tensor, k: int):
-    """Compute average of `y` of `k` nearest neighbors of `x`."""
-
-    # Find indices of `k` nearest neighbors
-    indices = torch.cdist(x, x).topk(k, largest=False).indices
-
-    # Compute average of `y` of `k` nearest neighbors
-    return y[indices].mean(1)
-
-
-def knn_relabel(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    # All pairwise distances, leaving out the diagonal
-    dists = torch.cdist(x, x).fill_diagonal_(torch.inf)
-
-    # Compute a prediction for each point and each value of k
-    preds = cummean(y[dists.argsort()][:, :-1])  # [n, n - 1]
-
-    # Brier score loss for each value of k
-    losses = torch.square(preds - y[:, None]).mean(0)
-
-    # Choose the best one
-    k = int(losses.argmin())
-    print(f"Chose k = {k + 1} with LOOCV")
-
-    return preds[:, k]
-
-
-def local_outlier_factor(X, k):
-    # Calculate pairwise squared Euclidean distances
-    dist = torch.cdist(X, X).fill_diagonal_(torch.inf)
-    distances, indices = dist.topk(k, largest=False)
-
-    # Calculate reachability distances
-    k_dists = distances[:, -1, None].expand_as(distances)
-    lrd = torch.max(distances, k_dists).mean(dim=1).reciprocal()
-
-    lrd_ratios = lrd[indices] / lrd[:, None]
-    return lrd_ratios.sum(dim=1) / k
-
-
 def zeta_filter(x: torch.Tensor, y: torch.Tensor, *, k: int = 0, q: float = 0.5):
     """Remove points whose labels are far the average of their neighbors' labels."""
 
