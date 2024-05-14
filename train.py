@@ -274,11 +274,18 @@ def train(cfg: TrainConfig):
         torch.save(strong_test_probs, strong_predictions_path / "test.pt")
 
     print("\n\033[32m===== Training w2s model =====\033[0m")
+    strong_model = AutoModelForSequenceClassification.from_pretrained(
+        STRONG_NAME, torch_dtype="auto", device_map={"": "cuda"}
+    )
+    # HuggingFace init for the head is too large
+    strong_model.score.weight.data *= 0.01
+    strong_model.config.pad_token_id = strong_tokenizer.pad_token_id
+
     # Weak to strong generalization
     acts_path = root / "ceil/acts.pt"
     if acts_path.exists():
         print(f"Loading strong activations from {acts_path}")
-        train_acts = torch.load(acts_path, map_location=strong_model.device)
+        train_acts = torch.load(acts_path, map_location="cuda")
     else:
         print("Gathering strong activations")
         train_acts = gather_hiddens(strong_model, strong_train)
@@ -296,7 +303,7 @@ def train(cfg: TrainConfig):
             .topk(int(len(weak_y) * (1 - cfg.contamination)), largest=False)
             .indices
         )
-        w2s_train = w2s_train.select(indices)
+        w2s_train = w2s_train.select(indices).shuffle(seed=42)
 
     # Check gt metrics every 100 steps during w2s training.
     # We can overfit to the weak labels before a single epoch.
