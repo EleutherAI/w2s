@@ -21,6 +21,7 @@ from transformers import (
 
 import wandb
 from w2s.ds_registry import load_and_process_dataset
+from w2s.grads import get_kernel_grads
 from w2s.knn import gather_hiddens, topofilter
 from w2s.loss import log_confidence_loss
 from w2s.roc_auc import roc_auc
@@ -46,7 +47,7 @@ class TrainConfig(Serializable):
     run_name: str = ""
     """Name of the run."""
 
-    embedding_type: Literal["acts", "probe-kernel-grads"] = "acts"
+    embedding_type: Literal["acts", "probe-kernel-grads", "kernel-grads"] = "acts"
     """Type of embeddings to use for the weak-to-strong model."""
 
 
@@ -276,12 +277,16 @@ def train(cfg: TrainConfig):
         train_grads = sign_y * train_acts
         kernel_grads = train_grads @ jac.T
 
-        # leace away sign_y
-        eraser = LeaceEraser.fit(x=kernel_grads, z=sign_y)
+        # leace away y
+        eraser = LeaceEraser.fit(x=kernel_grads, z=(y > 0.5).float())
         embeddings = eraser(x=kernel_grads)
     elif cfg.embedding_type == "kernel-grads":
         # grab downsampled jacobians and gradients -> jvps
-        raise NotImplementedError("Not implemented")
+        kernel_grads = get_kernel_grads(strong_model, strong_train, d_jacobian=20)
+
+        # leace away sign_y
+        eraser = LeaceEraser.fit(x=kernel_grads, z=(y > 0.5).float())
+        embeddings = eraser(x=kernel_grads)
     elif cfg.embedding_type == "acts":
         embeddings = train_acts
     else:
