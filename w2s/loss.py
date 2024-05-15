@@ -22,3 +22,7 @@ def log_confidence_loss(
     labels_binary = torch.stack([1.0 - labels, labels], dim=1)
     target = labels_binary * (1 - coef) + strong_preds.detach() * coef
     return torch.nn.functional.cross_entropy(logits, target)
+
+
+def xent_loss(logits, labels):
+    return torch.nn.functional.cross_entropy(logits, labels.long()).mean()

@@ -20,7 +20,7 @@ from transformers import (
 import wandb
 from w2s.ds_registry import load_and_process_dataset
 from w2s.knn import gather_hiddens
-from w2s.loss import log_confidence_loss
+from w2s.loss import xent_loss
 from w2s.roc_auc import roc_auc
 
 
@@ -50,8 +50,9 @@ class DistillationTrainer(Trainer):
         labels = inputs.pop("labels")
 
         outputs = model(**inputs)
-        frac = self.state.global_step / self.state.max_steps
-        loss = log_confidence_loss(outputs.logits, labels, frac)
+        self.state.global_step / self.state.max_steps
+        loss = xent_loss(outputs.logits, labels)
+        # loss = log_confidence_loss(outputs.logits, labels, frac)
 
         return (loss, outputs) if return_outputs else loss
 
