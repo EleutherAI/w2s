@@ -17,6 +17,8 @@ from transformers import (
     TrainingArguments,
 )
 
+import gc
+
 import wandb
 from w2s.ds_registry import load_and_process_dataset
 from w2s.oraclefilter import rand_filter, oracle_filter
@@ -217,6 +219,26 @@ def train(cfg: TrainConfig):
     strong_ckpt = root / "ceil" / "best-ckpt"
     if strong_ckpt.exists():
         print(f"Strong ceiling model already exists at {strong_ckpt}")
+        strong_trained = AutoModelForSequenceClassification.from_pretrained(
+            strong_ckpt, torch_dtype="auto"
+        )
+        strong_trained.config.pad_token_id = strong_tokenizer.pad_token_id
+
+        strong_trained_trainer = Trainer(
+            model=strong_trained,
+            compute_metrics=compute_metrics,
+            args=training_args,
+            data_collator=DataCollatorWithPadding(strong_tokenizer),
+            tokenizer=strong_tokenizer,
+            train_dataset=strong_train,
+            eval_dataset=ceil_test
+        )
+
+        strong_trained_logits = strong_trained_trainer.predict(strong_train).predictions
+        # Keep both negative and positive class probs
+        strong_trained_probs_all = torch.from_numpy(strong_trained_logits).softmax(-1)
+        del strong_trained, strong_trained_trainer
+        gc.collect()
     else:
         print("\n\033[32m===== Training strong ceiling model =====\033[0m")
         strong_model = AutoModelForSequenceClassification.from_pretrained(
@@ -272,8 +294,8 @@ def train(cfg: TrainConfig):
         w2s_train = w2s_train.select(indices)
     if cfg.oracle_filter > 0.0:
         y = train_probs.to(train_acts.device)
-        labels = torch.tensor(weak_train['labels']).to(train_acts.device)
-        top = oracle_filter(labels, y, q=1.0 - cfg.oracle_filter)
+        # labels = torch.tensor(weak_train['labels']).to(train_acts.device)
+        top = oracle_filter(strong_trained_probs_all, y, q=1.0 - cfg.oracle_filter)
         w2s_train = w2s_train.select(top.tolist())
 
     # Check gt metrics every 100 steps during w2s training.
