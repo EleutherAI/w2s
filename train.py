@@ -20,6 +20,7 @@ from transformers import (
 import wandb
 from w2s.ds_registry import load_and_process_dataset
 from w2s.knn import gather_hiddens, topofilter
+from w2s.loss import log_confidence_loss
 from w2s.roc_auc import roc_auc
 
 disable_caching()
@@ -54,11 +55,13 @@ class DistillationTrainer(Trainer):
         labels = inputs.pop("labels").float()
 
         outputs = model(**inputs)
-        # frac = self.state.global_step / self.state.max_steps
-        # loss = log_confidence_loss(outputs.logits, labels, frac)
 
-        labels = torch.stack([1.0 - labels, labels], dim=-1)
-        loss = torch.nn.functional.cross_entropy(outputs.logits, labels)
+        denom = self.state.max_steps
+        frac = self.state.global_step / denom if denom > 0 else 1.0
+        loss = log_confidence_loss(outputs.logits, labels, frac)
+
+        # labels = torch.stack([1.0 - labels, labels], dim=-1)
+        # loss = torch.nn.functional.cross_entropy(outputs.logits, labels)
         return (loss, outputs) if return_outputs else loss
 
 
@@ -259,9 +262,9 @@ def train(cfg: TrainConfig):
     training_args.run_name = cfg.dataset + "/w2s" + cfg.run_name
 
     should_train = True
-    w2s_ckpt = root / "ceil" / "best-ckpt"
+    w2s_ckpt = root / ("w2s" + cfg.run_name) / "best-ckpt"
     if w2s_ckpt.exists():
-        print(f"W2S model already exists at {strong_ckpt}")
+        print(f"W2S model already exists at {w2s_ckpt}")
 
         w2s_model = AutoPeftModelForSequenceClassification.from_pretrained(
             w2s_ckpt, torch_dtype="auto", device_map={"": "cuda"}
@@ -304,7 +307,7 @@ def train(cfg: TrainConfig):
 
     # Save memory
     del w2s_model
-    preds_path = root / "ceil/preds.pt"
+    preds_path = root / ("w2s" + cfg.run_name) / "preds.pt"
 
     # Strong to strong generalization
     for i in range(cfg.s2s_iter):
@@ -321,7 +324,6 @@ def train(cfg: TrainConfig):
             torch.save(train_probs, preds_path)
 
         del trainer
-
         w2s_train = w2s_train.remove_columns("labels").add_column(
             "labels", train_probs.numpy()
         )
