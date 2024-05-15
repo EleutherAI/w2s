@@ -76,7 +76,7 @@ def scan_topo(ds_name, cfg):
     print(f"With k_Zeta: {cfg.kzeta}")
 
     for k_cc in cfg.kcc:
-        indices = topofilter(acts, y, contamination, k=cfg.kzeta, k_cc=k_cc)
+        indices = topofilter(acts, y, contamination, k=cfg.kzeta, kcc=k_cc)
 
         auc = roc_auc(gt[indices], wk[indices])
         acc = ((wk[indices] > 0.5) == gt[indices]).to(torch.float).mean()

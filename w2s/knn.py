@@ -44,27 +44,41 @@ def topo_cc(x: torch.Tensor, y: torch.Tensor, *, k: int = 5):
     return neg_mask | pos_mask
 
 
-def topofilter(
-    x: torch.Tensor, y: torch.Tensor, contamination: float = 0.1, *, k: int = 5, k_cc: int = None
+def topo_relabel(
+    x: torch.Tensor, y: torch.Tensor, kcc, kzeta
 ):
     """Remove points whose labels are far the average of their neighbors' labels."""
-
-    if k_cc is None:
-        k_cc = k
-
-    C = topo_cc(x, y, k=k_cc)
+ 
+    C = topo_cc(x, y, k=kcc)
     x_C, y_C = x[C], y[C]
 
     # Zeta filtering
     dists = torch.cdist(x_C, x_C).fill_diagonal_(torch.inf)
-    if dists.shape[0] < k:
+    if dists.shape[0] < kzeta:
         print(f"Warning: Not enough points for k={k} in ZetaFilter, using all {dists.shape[0]} from CC.")
-        k = dists.shape[0]
+        kzeta = dists.shape[0]
 
-    indices = dists.topk(k, largest=False).indices
+    indices = dists.topk(kzeta, largest=False).indices
 
-    # Compute how far each point is from its average neighbor
+    # Compute average neighbor
     knn_labels = y_C[indices].float().mean(1)
+
+    return knn_labels
+
+
+def zeta_relabel(
+    x: torch.Tensor, y: torch.Tensor, kzeta
+):
+    return topo_relabel(x, y, kcc=-1, kzeta=kzeta)
+
+
+def topofilter(
+    x: torch.Tensor, y: torch.Tensor, contamination: float = 0.1, *, kcc: int = None, k: int = 5
+):
+    if kcc is None:
+        kcc = k
+
+    knn_labels = topo_relabel(x, y, kcc=kcc, kzeta=k)
     dists = torch.abs(y_C - knn_labels)
 
     # Remove points that are furthest from their average neighbor

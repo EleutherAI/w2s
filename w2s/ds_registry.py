@@ -413,7 +413,8 @@ def format_openbookqa(ex, rng):
     choices = [
         f"{a}) {t}" for a, t in zip(ex["choices"]["label"], ex["choices"]["text"])
     ]
-    txt = f"Q: {ex['question_stem']}\n\nChoices:\n{'\n'.join(choices)}\n\nAnswer: {ans}"
+    newline = '\n'  # for Python 3.11 compat
+    txt = f"Q: {ex['question_stem']}\n\nChoices:\n{newline.join(choices)}\n\nAnswer: {ans}"
     return dict(txt=txt, hard_label=hard_label)
 
 
