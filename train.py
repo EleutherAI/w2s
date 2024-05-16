@@ -168,8 +168,8 @@ def train(cfg: TrainConfig):
     if cfg.probe2s:
         assert label_dir.exists(), "Probe labels must be saved for probe2s"
         print(f"Loading probe labels from {label_dir}")
-        train_probs = torch.load(label_dir / "logreg_train.pt")
-        test_probs = torch.load(label_dir / "logreg_test.pt")
+        train_probs = torch.load(label_dir / "logreg_train.pt").cpu().detach()
+        test_probs = torch.load(label_dir / "logreg_test.pt").cpu().detach()
     elif label_dir.exists():
         print(f"Loading weak labels from {label_dir}")
         train_probs = torch.load(label_dir / "train.pt")
