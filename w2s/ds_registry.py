@@ -253,7 +253,8 @@ def format_dream(ex, rng):
 
         ans = rng.choice(distractors)
 
-    txt = f"{'\n'.join(ex['dialogue'])}\n\nQ: {ex['question']} A: {ans}"
+    newline = '\n'  # for Python 3.11 compat
+    txt = f"{newline.join(ex['dialogue'])}\n\nQ: {ex['question']} A: {ans}"
     return dict(txt=txt, hard_label=hard_label)
 
 
