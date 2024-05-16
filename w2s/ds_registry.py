@@ -189,19 +189,27 @@ def hf_loader(*hf_name, split_names=None, n_test=None):
     If `n_test` is provided, it will concatenate all splits together
     and then take a deterministic test set of size `n_test` from it.
     """
-    if n_test is not None:
-        assert split_names is None
-        ds = hf_load_dataset(*hf_name)
-        if isinstance(ds, HfDatasetDict):
-            ds = concatenate_datasets(ds.values())  # type: ignore
-        assert isinstance(ds, HfDataset)
-        splits = ds.train_test_split(test_size=n_test, seed=0)
-        return lambda split: splits[split]
 
-    if split_names is None:
-        split_names = dict()
+    # this thunk avoids loading datasets at import time
+    def thunk(split):
+        nonlocal split_names
+        if n_test is not None:
+            assert split_names is None
+            ds = hf_load_dataset(*hf_name)
+            if isinstance(ds, HfDatasetDict):
+                ds = concatenate_datasets(ds.values())  # type: ignore
+            assert isinstance(ds, HfDataset)
+            # the seed is fixed so that all runs use the same test pool
+            splits = ds.train_test_split(test_size=n_test, seed=0)
 
-    return lambda split: hf_load_dataset(*hf_name, split=split_names.get(split, split))
+            return splits[split]
+
+        if split_names is None:
+            split_names = dict()
+
+        return hf_load_dataset(*hf_name, split=split_names.get(split, split))
+
+    return thunk
 
 
 ##########
@@ -253,7 +261,8 @@ def format_dream(ex, rng):
 
         ans = rng.choice(distractors)
 
-    txt = f"{'\n'.join(ex['dialogue'])}\n\nQ: {ex['question']} A: {ans}"
+    joined = "\n".join(ex["dialogue"])
+    txt = f"{joined}\n\nQ: {ex['question']} A: {ans}"
     return dict(txt=txt, hard_label=hard_label)
 
 
@@ -413,7 +422,8 @@ def format_openbookqa(ex, rng):
     choices = [
         f"{a}) {t}" for a, t in zip(ex["choices"]["label"], ex["choices"]["text"])
     ]
-    txt = f"Q: {ex['question_stem']}\n\nChoices:\n{'\n'.join(choices)}\n\nAnswer: {ans}"
+    joined = "\n".join(choices)
+    txt = f"Q: {ex['question_stem']}\n\nChoices:\n{joined}\n\nAnswer: {ans}"
     return dict(txt=txt, hard_label=hard_label)
 
 
