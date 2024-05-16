@@ -49,6 +49,9 @@ class TrainConfig(Serializable):
     s2s_iter: int = 0
     """Number of strong-to-strong iterations to perform."""
 
+    probe2s: bool = False
+    """Whether to use probe labels for w2s."""
+
 
 class DistillationTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False):
@@ -162,7 +165,12 @@ def train(cfg: TrainConfig):
 
     # Gather weak labels
     label_dir = root / "floor/preds"
-    if label_dir.exists():
+    if cfg.probe2s:
+        assert label_dir.exists(), "Probe labels must be saved for probe2s"
+        print(f"Loading probe labels from {label_dir}")
+        train_probs = torch.load(label_dir / "logreg_train.pt")
+        test_probs = torch.load(label_dir / "logreg_test.pt")
+    elif label_dir.exists():
         print(f"Loading weak labels from {label_dir}")
         train_probs = torch.load(label_dir / "train.pt")
         test_probs = torch.load(label_dir / "test.pt")
