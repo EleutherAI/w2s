@@ -3,20 +3,12 @@ import hashlib
 from collections import Counter
 from dataclasses import dataclass
 from random import Random
-from typing import Any, Callable
+from typing import Any, Callable, Literal, Union
 
-from datasets import (
-    Dataset as HfDataset,
-)
-from datasets import (
-    DatasetDict as HfDatasetDict,
-)
-from datasets import (
-    concatenate_datasets,
-)
-from datasets import (
-    load_dataset as hf_load_dataset,
-)
+from datasets import Dataset as HfDataset
+from datasets import DatasetDict as HfDatasetDict
+from datasets import concatenate_datasets
+from datasets import load_dataset as hf_load_dataset
 
 
 @dataclass
@@ -60,17 +52,17 @@ def balance(ds: HfDataset, seed: int):
     return concatenate_datasets([minority_ds, majority_ds]).shuffle(seed=seed)
 
 
-def load_and_process_dataset(
+def load_and_process_train_test(
     ds_name: str,
-    split_sizes: dict,
+    split_sizes: dict[str, int],
     seed: int = 0,
     take_test_from_train: bool = False,
 ):
-    n_tr, n_te = split_sizes.get("train", 0), split_sizes.get("test", 0)
+    n_test = split_sizes.get("test", 0)
     if take_test_from_train:
         # in this case we gather excess documents from the train set, and
         # at the end redistribute them to the test set
-        split_sizes["train"] = split_sizes["train"] + split_sizes["test"]
+        split_sizes["train"] += n_test
         del split_sizes["test"]
 
     if ds_name not in _REGISTRY:
@@ -112,10 +104,50 @@ def load_and_process_dataset(
         results[split] = ds
 
     if take_test_from_train:
-        both = results["train"]
-        results["train"] = both.select(range(n_tr))
-        results["test"] = both.select(range(n_tr, n_tr + n_te))
+        # take the first n_test examples from the training set as the test set
+        results["test"] = results["train"].select(range(n_test))
+        results["train"] = results["train"].select(range(n_test, len(results["train"])))
     return results
+
+
+def load_and_process_dataset(
+    ds_name: str,
+    n_train: int,
+    n_val: int,
+    n_test: int,
+    n_predict: Union[Literal["train"], int],
+    take_test_from_train: bool = False,
+    seed=0,
+) -> HfDatasetDict:
+    """
+    Returns a dict with keys 'train', 'val', 'test', and optionally 'predict', and dataset values
+    Examples in 'test' split can never appear in 'train', 'val', or 'predict' on any run.
+    """
+    split_sizes = dict(train=n_train + n_val, test=n_test)
+    if n_predict != "train":
+        assert n_predict >= 0
+        split_sizes["train"] += n_predict
+
+    results = load_and_process_train_test(
+        ds_name, split_sizes, seed, take_test_from_train
+    )
+
+    splits = dict(
+        val=results["train"].select(range(n_val)),
+        train=results["train"].select(range(n_val, len(results["train"]))),
+        test=results["test"],
+    )
+    if n_predict == "train":
+        # simply use the training set for predictions
+        splits["predict"] = splits["train"]
+    elif n_predict > 0:
+        # take the requested *fraction* of examples from the training set
+        subsplits = splits["train"].train_test_split(
+            test_size=n_predict / (n_train + n_predict)
+        )
+        splits["train"], splits["predict"] = subsplits["train"], subsplits["test"]
+
+    return HfDatasetDict(splits)
 
 
 warned_about_choices = set()
@@ -141,45 +173,6 @@ def encode_choice(text, tokenizer):
             f'Warning: Only the first token of multitoken choice "{text}" will be used'
         )
     return c_ids[0]
-
-
-def tokenize_dataset(
-    raw_ds: HfDataset,
-    tokenizer: Callable,
-    max_ctx: int,
-):
-    """
-    This function prepares the dataset for training. It takes the raw dataset,
-    a formatting function, a tokenizer, a maximum context length
-
-    Parameters:
-    raw_ds: The raw dataset to be processed.
-    tokenizer: The tokenizer to be used on the formatted dataset.
-    max_ctx: The maximum context length for the tokenizer.
-
-    Returns:
-    ds: The processed and shuffled dataset ready for training.
-    """
-
-    def process_function(ex):
-        toks = tokenizer(ex["txt"])
-        out = dict(
-            input_ids=toks["input_ids"],
-        )
-
-        if "choices" in ex:
-            choice_toks = [encode_choice(c, tokenizer) for c in ex["choices"]]
-            out["choice_input_ids"] = choice_toks
-
-        return out
-
-    ds = raw_ds.map(process_function, batched=False)
-    pre_len = len(ds)
-    ds = ds.filter(lambda x: len(x["input_ids"]) < max_ctx)
-    print(
-        f"Filtered {100 * (1 - len(ds) / pre_len):.2f}% of examples for being too long"
-    )
-    return ds
 
 
 def hf_loader(*hf_name, split_names=None, n_test=None):
@@ -617,52 +610,6 @@ register_dataset(
 )
 
 
-def format_sciq_for_lm_head(ex, rng):
-    hard_label = int(rng.random() < 0.5)
-    if hard_label:
-        ans = ex["correct_answer"]
-    else:
-        ans = rng.choice([ex["distractor1"], ex["distractor2"], ex["distractor3"]])
-
-    txt = f"Q: {ex['question']} A: {ans}. Is this correct?"
-    choices = (" No", " Yes")
-    return dict(txt=txt, hard_label=hard_label, choices=choices)
-
-
-register_dataset(
-    "sciq_for_lm_head",
-    DatasetConfig(
-        loader=hf_loader("sciq", n_test=SCIQ_N_TEST),  # type: ignore
-        formatter=format_sciq_for_lm_head,  # type: ignore
-    ),
-)
-
-
-def format_sciq_for_lm_head_with_support(ex, rng):
-    # from https://github.com/EleutherAI/elk-generalization
-    template = (
-        "Name: Bob\n\nPassage 1:\n{support}\n\nQ1: "
-        '"{question}" Is the answer "{answer}"?\nA:'
-    )
-    choices = (" No", " Yes")
-    hard_label = int(rng.random() < 0.5)
-    if hard_label:
-        ans = ex["correct_answer"]
-    else:
-        ans = rng.choice([ex["distractor1"], ex["distractor2"], ex["distractor3"]])
-    txt = template.format(support=ex["support"], question=ex["question"], answer=ans)
-    return dict(txt=txt, hard_label=hard_label, choices=choices)
-
-
-register_dataset(
-    "sciq_for_lm_head_with_support",
-    DatasetConfig(
-        loader=hf_loader("sciq", n_test=SCIQ_N_TEST),  # type: ignore
-        formatter=format_sciq_for_lm_head_with_support,  # type: ignore
-    ),
-)
-
-
 def format_sciq_with_support(ex, rng):
     # from https://github.com/EleutherAI/elk-generalization
     template = (
@@ -740,6 +687,47 @@ register_dataset(
     DatasetConfig(
         loader=hf_loader("boolq", split_names=dict(test="validation")),  # type: ignore
         formatter=format_boolq,  # type: ignore
+    ),
+)
+
+
+def format_amazon_polarity(ex, rng):
+    return dict(txt=f"{ex['title']} {ex['content']}", hard_label=ex["label"])
+
+
+register_dataset(
+    "amazon_polarity",
+    DatasetConfig(
+        loader=hf_loader("amazon_polarity"),  # type: ignore
+        formatter=format_amazon_polarity,  # type: ignore
+    ),
+)
+
+
+def format_underspecified_amazon_polarity(ex, rng, use_gt=True):
+    txt = f"{ex['title']} {ex['content']}\n\nDoes this review say the product was \"good\" or \"great\"?"  # noqa
+    words = {"good", "great"}
+    label = (
+        ex["label"]
+        if use_gt
+        else any(w in ex["content"].lower() or w in ex["title"].lower() for w in words)
+    )
+    return dict(txt=txt, hard_label=label)
+
+
+register_dataset(
+    "amazon_polarity_gt",
+    DatasetConfig(
+        loader=hf_loader("amazon_polarity"),  # type: ignore
+        formatter=functools.partial(format_underspecified_amazon_polarity, use_gt=True),  # type: ignore  # noqa
+    ),
+)
+
+register_dataset(
+    "amazon_polarity_weak",
+    DatasetConfig(
+        loader=hf_loader("amazon_polarity"),  # type: ignore
+        formatter=functools.partial(format_underspecified_amazon_polarity, use_gt=False),  # type: ignore  # noqa
     ),
 )
 
