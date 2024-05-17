@@ -19,7 +19,6 @@ from transformers import (
 
 import wandb
 from w2s.ds_registry import load_and_process_dataset
-from w2s.knn import gather_hiddens, topofilter
 from w2s.loss import log_confidence_loss
 from w2s.roc_auc import roc_auc
 
@@ -28,26 +27,23 @@ disable_caching()
 
 @dataclass
 class TrainConfig(Serializable):
-    weak_name: str
-    """Name of the weak model to use."""
-
     dataset: str = field(positional=True)
     """Name of the dataset to use."""
 
-    contamination: float = field(default=0.0)
-    """What fraction of data points to remove as outliers."""
+    weak_name: str = "Qwen/Qwen1.5-0.5B"
+    """Name of the weak model to use."""
 
     minibatch_size: int = 8
     """Size of the minibatches to use during training."""
-
-    outlier_k: int = field(default=0)
-    """Number of neighbors to consider when removing outliers."""
 
     run_name: str = ""
     """Name of the run."""
 
     s2s_iter: int = 0
     """Number of strong-to-strong iterations to perform."""
+
+    strong_model: str = "meta-llama/Meta-Llama-3-8B"
+    """Name of the main strong model to use."""
 
 
 class DistillationTrainer(Trainer):
@@ -62,7 +58,7 @@ class DistillationTrainer(Trainer):
         return (loss, outputs) if return_outputs else loss
 
 
-# Works for Llama, Mistral, and Qwen architectures
+# Works for Llama, Mistral, Gemma, and Qwen architectures
 LORA_MODULES = [
     "gate_proj",
     "down_proj",
@@ -88,9 +84,15 @@ def move_best_ckpt(trainer: Trainer):
 
 def train(cfg: TrainConfig):
     lora_cfg = LoraConfig(target_modules=LORA_MODULES)
+    lrs = {
+        "Qwen/Qwen1.5-0.5B": 5e-5,
+        "meta-llama/Meta-Llama-3-8B": 8e-5,
+        "mistralai/Mistral-7B-v0.1": 3e-5,
+        "google/gemma-7b": 5e-5,
+    }
 
     # for 2 strong models we do WEAK -> STRONG[0] -> STRONG[1] -> STRONG[0] -> ...
-    STRONG_NAMES = ["meta-llama/Meta-Llama-3-8B", "mistralai/Mistral-7B-v0.1"]
+    STRONG_NAMES = [cfg.strong_model, "mistralai/Mistral-7B-v0.1"]
     MAIN_STRONG_NAME = STRONG_NAMES[0]
     strong_tokenizers = {k: AutoTokenizer.from_pretrained(k) for k in STRONG_NAMES}
     weak_tokenizer = AutoTokenizer.from_pretrained(cfg.weak_name)
@@ -105,6 +107,15 @@ def train(cfg: TrainConfig):
     splits = load_and_process_dataset(
         cfg.dataset, split_sizes=dict(train=20_000, test=1_000)
     )
+    trains = splits["train"].train_test_split(test_size=0.5, shuffle=False)
+    trains = [trains["train"], trains["test"]]
+    # split in half
+    # train weak on union, predict on union
+    # train strong on union
+    # train w2s on train1, predict on train1 and train2
+    # train w2s on train2, predict on train1 and train2
+    # train s2s on train1 OOD, predict on train1 and train2
+    # train s2s on train2 OOD, predict on train1 and train2...
 
     def init_strong_model(name):
         model = AutoModelForSequenceClassification.from_pretrained(
@@ -128,27 +139,33 @@ def train(cfg: TrainConfig):
 
     cols = ["hard_label", "txt"]
     test = splits["test"].select_columns(cols)
-    train = splits["train"].select_columns(cols)
-    print(f"Train example:\n\n{train[0]['txt']}\n\nLabel: {train[0]['hard_label']}")
+    train_union = splits["train"].select_columns(cols)
+    trains = [t.select_columns(cols) for t in trains]
+    print(
+        f"Train example:\n\n{trains[0][0]['txt']}\n\nLabel: {trains[0][0]['hard_label']}"  # noqa
+    )
 
     weak_test = test.map(weak_processor, batched=True).cast_column(
         "labels", Value("int64")
     )
-    weak_train = train.map(weak_processor, batched=True).cast_column(
+    weak_train_union = train_union.map(weak_processor, batched=True).cast_column(
         "labels", Value("int64")
     )
+    weak_trains = [
+        t.map(weak_processor, batched=True).cast_column("labels", Value("int64"))
+        for t in trains
+    ]
 
     root = Path("results") / cfg.dataset
     train_cfg = dict(
         output_dir=str(root / "floor"),
-        num_train_epochs=2,
+        num_train_epochs=1,
         adam_beta2=0.95,
         gradient_accumulation_steps=8 // cfg.minibatch_size,
         evaluation_strategy="epoch",
         label_names=["labels"],
-        load_best_model_at_end=True,
+        load_best_model_at_end=False,
         logging_steps=50,
-        metric_for_best_model="auroc",
         per_device_train_batch_size=cfg.minibatch_size,
         per_device_eval_batch_size=cfg.minibatch_size,
         run_name=cfg.dataset + "/floor" + cfg.run_name,
@@ -157,14 +174,17 @@ def train(cfg: TrainConfig):
         tf32=True,  # Use Tensor Cores even for fp32 matmuls
         warmup_steps=100,
         weight_decay=0.01,
-        learning_rate=3e-5,
+        learning_rate=lrs[cfg.weak_name],
     )
 
     # Gather weak labels
     label_dir = root / "floor/preds"
-    if label_dir.exists():
+    if (label_dir / "train1.pt").exists() and (label_dir / "train2.pt").exists():
         print(f"Loading weak labels from {label_dir}")
-        train_probs = torch.load(label_dir / "train.pt")
+        trains_probs = [
+            torch.load(label_dir / "train1.pt"),
+            torch.load(label_dir / "train2.pt"),
+        ]
         test_probs = torch.load(label_dir / "test.pt")
     else:
         should_train = True
@@ -194,40 +214,53 @@ def train(cfg: TrainConfig):
             eval_dataset=weak_test,
             model=weak_model,
             tokenizer=weak_tokenizer,
-            train_dataset=weak_train,
+            train_dataset=weak_train_union,
         )
         if should_train:
             print("\n\033[32m===== Training weak model =====\033[0m")
             trainer.train()
             wandb.finish()
-            move_best_ckpt(trainer)
+            # move_best_ckpt(trainer)
 
         print("Gathering weak labels")
-        train_logits = trainer.predict(weak_train).predictions
+        trains_logits = [trainer.predict(wt).predictions for wt in weak_trains]
         test_logits = trainer.predict(weak_test).predictions
 
         # Convert to probabilities, then keep only the positive probs
-        train_probs = torch.from_numpy(train_logits).softmax(-1)[:, 1]
+        trains_probs = [torch.from_numpy(tl).softmax(-1)[:, 1] for tl in trains_logits]
         test_probs = torch.from_numpy(test_logits).softmax(-1)[:, 1]
 
         label_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(train_probs, label_dir / "train.pt")
+        for i in range(len(trains_probs)):
+            torch.save(trains_probs[i], label_dir / f"train{i + 1}.pt")
         torch.save(test_probs, label_dir / "test.pt")
 
     def strong_processor(examples, tokenizer):
         return tokenizer(examples["txt"], truncation=True)
 
-    strong_trains = {
-        name: train.map(
+    strongs_trains = {
+        name: [
+            t.map(
+                strong_processor,
+                batched=True,
+                fn_kwargs={"tokenizer": strong_tokenizers[name]},
+            )
+            .rename_column("hard_label", "labels")
+            .cast_column("labels", Value("int64"))
+            for t in trains
+        ]
+        for name in STRONG_NAMES
+    }
+    main_strong_train_union = (
+        train_union.map(
             strong_processor,
             batched=True,
-            fn_kwargs={"tokenizer": strong_tokenizers[name]},
+            fn_kwargs={"tokenizer": strong_tokenizers[MAIN_STRONG_NAME]},
         )
         .rename_column("hard_label", "labels")
         .cast_column("labels", Value("int64"))
-        for name in STRONG_NAMES
-    }
-    ceil_tests = {
+    )
+    ceils_test = {
         name: test.map(
             strong_processor,
             batched=True,
@@ -245,123 +278,147 @@ def train(cfg: TrainConfig):
         print("\n\033[32m===== Training strong ceiling model =====\033[0m")
         train_cfg["output_dir"] = str(root / "ceil")
         train_cfg["run_name"] = cfg.dataset + "/ceil" + cfg.run_name
+        train_cfg["learning_rate"] = lrs[MAIN_STRONG_NAME]
 
         trainer = Trainer(
             args=TrainingArguments(**train_cfg),  # type: ignore
             compute_metrics=compute_metrics,
             data_collator=DataCollatorWithPadding(strong_tokenizers[MAIN_STRONG_NAME]),
-            eval_dataset=ceil_tests[MAIN_STRONG_NAME],
+            eval_dataset=ceils_test[MAIN_STRONG_NAME],
             model=get_peft_model(init_strong_model(MAIN_STRONG_NAME), lora_cfg),
             tokenizer=strong_tokenizers[MAIN_STRONG_NAME],
-            train_dataset=strong_trains[MAIN_STRONG_NAME],
+            train_dataset=main_strong_train_union,
         )
         trainer.train()
         wandb.finish()
-        move_best_ckpt(trainer)
+        # move_best_ckpt(trainer)
 
     # Weak to strong generalization
-    w2s_train = strong_trains[MAIN_STRONG_NAME].remove_columns("labels")
-    w2s_train = w2s_train.add_column("labels", train_probs.numpy())
+    w2s_trains = strongs_trains[MAIN_STRONG_NAME]
+    w2s_trains = [
+        t.remove_columns("labels").add_column("labels", tp.numpy())
+        for t, tp in zip(w2s_trains, trains_probs)
+    ]
 
-    # Check gt metrics every 100 steps during w2s training.
-    # We can overfit to the weak labels before a single epoch.
-    train_cfg["evaluation_strategy"] = "steps"
-    train_cfg["save_strategy"] = "steps"
-    train_cfg["eval_steps"] = 100
-    train_cfg["save_steps"] = 100
-    train_cfg["label_names"] = ["labels"]
-    train_cfg["output_dir"] = str(root / ("w2s" + cfg.run_name))
-    train_cfg["run_name"] = cfg.dataset + "/w2s" + cfg.run_name
+    for i, w2s_train in enumerate(w2s_trains):
+        out_path = root / (f"w2s{i + 1}" + cfg.run_name)
+        # Check gt metrics every 100 steps during w2s training.
+        # We can overfit to the weak labels before a single epoch.
+        train_cfg["evaluation_strategy"] = "steps"
+        train_cfg["save_strategy"] = "steps"
+        train_cfg["eval_steps"] = 100
+        train_cfg["save_steps"] = 100
+        train_cfg["label_names"] = ["labels"]
+        train_cfg["output_dir"] = str(out_path)
+        train_cfg["run_name"] = cfg.dataset + f"/w2s{i + 1}" + cfg.run_name
+        train_cfg["learning_rate"] = lrs[MAIN_STRONG_NAME]
 
-    should_train = True
-    w2s_ckpt = root / ("w2s" + cfg.run_name) / "best-ckpt"
-    if w2s_ckpt.exists():
-        print(f"W2S model already exists at {w2s_ckpt}")
+        should_train = True
+        w2s_ckpt = out_path / "best-ckpt"
+        if w2s_ckpt.exists():
+            print(f"W2S model already exists at {w2s_ckpt}")
 
-        w2s_model = AutoPeftModelForSequenceClassification.from_pretrained(
-            w2s_ckpt, torch_dtype="auto", device_map={"": "cuda"}
-        )
-        should_train = False
-    else:
-        print("\n\033[32m===== Training w2s model =====\033[0m")
-
-        strong_model = init_strong_model(MAIN_STRONG_NAME)
-        if cfg.contamination > 0.0:
-            acts_path = root / "ceil/acts.pt"
-            if acts_path.exists():
-                print(f"Loading strong activations from {acts_path}")
-                train_acts = torch.load(acts_path, map_location=strong_model.device)
-            else:
-                print("Gathering strong activations")
-                train_acts = gather_hiddens(strong_model, w2s_train)
-                torch.save(train_acts, acts_path)
-
-            y = train_probs.to(train_acts.device)
-            indices = topofilter(train_acts, y, cfg.contamination, k=cfg.outlier_k)
-            w2s_train = w2s_train.select(indices)
-
-        w2s_model = get_peft_model(strong_model, lora_cfg)
-
-    w2s_model.config.pad_token_id = strong_tokenizers[MAIN_STRONG_NAME].pad_token_id  # type: ignore # noqa
-    trainer = DistillationTrainer(
-        args=TrainingArguments(**train_cfg),  # type: ignore
-        compute_metrics=compute_metrics,
-        data_collator=DataCollatorWithPadding(strong_tokenizers[MAIN_STRONG_NAME]),
-        eval_dataset=ceil_tests[MAIN_STRONG_NAME],
-        model=w2s_model,
-        tokenizer=strong_tokenizers[MAIN_STRONG_NAME],
-        train_dataset=w2s_train,
-    )
-    if should_train:
-        trainer.train()
-        wandb.finish()
-        move_best_ckpt(trainer)
-
-    # Save memory
-    del w2s_model
-
-    preds_path = root / ("w2s" + cfg.run_name) / "preds.pt"
-
-    # Strong to strong generalization
-    for i in range(cfg.s2s_iter):
-        strong_name = STRONG_NAMES[(i + 1) % len(STRONG_NAMES)]
-        print(f"\n\033[32m===== S2S-distillation {i + 1} ({strong_name}) =====\033[0m")
-
-        # Gather strong labels
-        if preds_path.exists():
-            print(f"Loading strong preds from {preds_path}")
-            train_probs = torch.load(preds_path)
+            w2s_model = AutoPeftModelForSequenceClassification.from_pretrained(
+                w2s_ckpt, torch_dtype="auto", device_map={"": "cuda"}
+            )
+            should_train = False
         else:
-            train_logits = trainer.predict(w2s_train).predictions
-            train_probs = torch.from_numpy(train_logits).softmax(-1)[:, 1]
+            print(f"\n\033[32m===== Training w2s{i + 1} model =====\033[0m")
 
-            torch.save(train_probs, preds_path)
+            strong_model = init_strong_model(MAIN_STRONG_NAME)
+            w2s_model = get_peft_model(strong_model, lora_cfg)
 
-        del trainer
-
-        w2s_train = (
-            strong_trains[strong_name]
-            .remove_columns("labels")
-            .add_column("labels", train_probs.numpy())
-        )
-
-        name = f"s2s_iter{i + 1}" + cfg.run_name
-        train_cfg["output_dir"] = str(root / name)
-        train_cfg["run_name"] = cfg.dataset + "/" + name
-
+        w2s_model.config.pad_token_id = strong_tokenizers[MAIN_STRONG_NAME].pad_token_id  # type: ignore # noqa
         trainer = DistillationTrainer(
             args=TrainingArguments(**train_cfg),  # type: ignore
             compute_metrics=compute_metrics,
-            data_collator=DataCollatorWithPadding(strong_tokenizers[strong_name]),
-            eval_dataset=ceil_tests[strong_name],
-            model=get_peft_model(init_strong_model(strong_name), lora_cfg),
-            tokenizer=strong_tokenizers[strong_name],
+            data_collator=DataCollatorWithPadding(strong_tokenizers[MAIN_STRONG_NAME]),
+            eval_dataset=ceils_test[MAIN_STRONG_NAME],
+            model=w2s_model,
+            tokenizer=strong_tokenizers[MAIN_STRONG_NAME],
             train_dataset=w2s_train,
         )
-        trainer.train()
-        wandb.finish()
+        if should_train:
+            trainer.train()
+            wandb.finish()
+            # move_best_ckpt(trainer)
 
-        preds_path = root / name / "preds.pt"
+        # save preds
+        preds_path = out_path / "preds"
+        trains_logits = [trainer.predict(t).predictions for t in w2s_trains]
+        test_logits = trainer.predict(ceils_test[MAIN_STRONG_NAME]).predictions
+        trains_probs = [torch.from_numpy(tl).softmax(-1)[:, 1] for tl in trains_logits]
+        test_probs = torch.from_numpy(test_logits).softmax(-1)[:, 1]
+        preds_path.mkdir(parents=True, exist_ok=True)
+        for j in range(len(trains_probs)):
+            torch.save(trains_probs[j], preds_path / f"train{j + 1}.pt")
+        torch.save(test_probs, preds_path / "test.pt")
+
+        # Save memory
+        del w2s_model
+        del trainer
+
+    prev_preds_dirs = [
+        root / (f"w2s{i + 1}" + cfg.run_name) / "preds" for i in range(len(w2s_trains))
+    ]
+
+    # Strong to strong generalization
+    for i in range(cfg.s2s_iter):
+        names = [f"s2s{j + 1}_iter{i + 1}" + cfg.run_name for j in range(len(trains))]
+        for j, name in enumerate(names):
+            strong_name = STRONG_NAMES[(i + 1) % len(STRONG_NAMES)]
+            print(
+                f"\n\033[32m===== S2S{j + 1}-distillation iter {i + 1} ({strong_name}) =====\033[0m"  # noqa
+            )
+
+            # Gather strong preds on this set from the
+            # previous model trained on the other set
+            preds_path = prev_preds_dirs[1 - j] / f"train{j + 1}.pt"
+            print(f"Loading strong preds from {preds_path}")
+            train_probs = torch.load(preds_path)
+
+            s2s_train = (
+                strongs_trains[strong_name][j]
+                .remove_columns("labels")
+                .add_column("labels", train_probs.numpy())
+            )
+
+            train_cfg["output_dir"] = str(root / name)
+            train_cfg["run_name"] = cfg.dataset + "/" + name
+            train_cfg["learning_rate"] = lrs[strong_name]
+
+            trainer = DistillationTrainer(
+                args=TrainingArguments(**train_cfg),  # type: ignore
+                compute_metrics=compute_metrics,
+                data_collator=DataCollatorWithPadding(strong_tokenizers[strong_name]),
+                eval_dataset=ceils_test[strong_name],
+                model=get_peft_model(init_strong_model(strong_name), lora_cfg),
+                tokenizer=strong_tokenizers[strong_name],
+                train_dataset=s2s_train,
+            )
+            trainer.train()
+            wandb.finish()
+
+            # save preds
+            preds_path = root / name / "preds"
+            trains_logits = [
+                trainer.predict(t).predictions for t in strongs_trains[strong_name]
+            ]
+            test_logits = trainer.predict(ceils_test[strong_name]).predictions
+            trains_probs = [
+                torch.from_numpy(tl).softmax(-1)[:, 1] for tl in trains_logits
+            ]
+            test_probs = torch.from_numpy(test_logits).softmax(-1)[:, 1]
+
+            preds_path.mkdir(parents=True, exist_ok=True)
+            for k in range(len(trains_probs)):
+                torch.save(trains_probs[k], preds_path / f"train{k + 1}.pt")
+            torch.save(test_probs, preds_path / "test.pt")
+
+            # Save memory
+            del trainer
+
+        prev_preds_dirs = [root / name / "preds" for name in names]
 
 
 if __name__ == "__main__":
