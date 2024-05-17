@@ -271,6 +271,8 @@ def train(cfg: TrainConfig):
     w2s_train = strong_trains[MAIN_STRONG_NAME].remove_columns("labels")
     w2s_train = w2s_train.add_column("labels", train_probs.numpy())
 
+    x2s = "p2s" if cfg.probe2s else "w2s"
+
     # Check gt metrics every 100 steps during w2s training.
     # We can overfit to the weak labels before a single epoch.
     train_cfg["evaluation_strategy"] = "steps"
@@ -278,11 +280,11 @@ def train(cfg: TrainConfig):
     train_cfg["eval_steps"] = 100
     train_cfg["save_steps"] = 100
     train_cfg["label_names"] = ["labels"]
-    train_cfg["output_dir"] = str(root / ("w2s" + cfg.run_name))
-    train_cfg["run_name"] = cfg.dataset + "/w2s" + cfg.run_name
+    train_cfg["output_dir"] = str(root / (x2s + cfg.run_name))
+    train_cfg["run_name"] = cfg.dataset + f"/{x2s}" + cfg.run_name
 
     should_train = True
-    w2s_ckpt = root / ("w2s" + cfg.run_name) / "best-ckpt"
+    w2s_ckpt = root / (x2s + cfg.run_name) / "best-ckpt"
     if w2s_ckpt.exists():
         print(f"W2S model already exists at {w2s_ckpt}")
 
@@ -291,7 +293,7 @@ def train(cfg: TrainConfig):
         )
         should_train = False
     else:
-        print("\n\033[32m===== Training w2s model =====\033[0m")
+        print(f"\n\033[32m===== Training {x2s} model =====\033[0m")
 
         strong_model = init_strong_model(MAIN_STRONG_NAME)
         if cfg.contamination > 0.0:
@@ -328,7 +330,7 @@ def train(cfg: TrainConfig):
     # Save memory
     del w2s_model
 
-    preds_path = root / ("w2s" + cfg.run_name) / "preds.pt"
+    preds_path = root / (x2s + cfg.run_name) / "preds.pt"
 
     # Strong to strong generalization
     for i in range(cfg.s2s_iter):
