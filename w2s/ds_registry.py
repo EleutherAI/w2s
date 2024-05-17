@@ -346,6 +346,25 @@ register_dataset(
 )
 
 
+LICHESS_N_TEST = 5000
+
+
+def format_lichess(ex, rng):
+    return dict(ctx=ex["ctx"], target=ex["target"])
+
+
+register_dataset(
+    "lichess",
+    DatasetConfig(
+        loader=hf_loader(
+            "EleutherAI/lichess-puzzles", n_test=LICHESS_N_TEST
+        ),  # type: ignore
+        formatter=format_lichess,  # type: ignore
+        task="generate",
+    ),
+)
+
+
 def format_mc_taco(ex, rng):
     template = "{sentence}\n\nGiven the above, {question} Is the answer {answer}?"
     return dict(txt=template.format(**ex), hard_label=ex["label"])
