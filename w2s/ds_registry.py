@@ -60,18 +60,22 @@ def balance(ds: HfDataset, seed: int):
     return concatenate_datasets([minority_ds, majority_ds]).shuffle(seed=seed)
 
 
+EVAL_SPLITS = ["test", "val"]
+
 def load_and_process_dataset(
     ds_name: str,
     split_sizes: dict,
     seed: int = 0,
     take_test_from_train: bool = False,
 ):
-    n_tr, n_te = split_sizes.get("train", 0), split_sizes.get("test", 0)
+    n_tr = split_sizes.get("train", 0)
+    ns_eval = {split: split_sizes.get(split, 0) for split in EVAL_SPLITS}
     if take_test_from_train:
         # in this case we gather excess documents from the train set, and
         # at the end redistribute them to the test set
-        split_sizes["train"] = split_sizes["train"] + split_sizes["test"]
-        del split_sizes["test"]
+        split_sizes["train"] = n_tr + sum(ns_eval.values())
+        for split in EVAL_SPLITS:
+            del split_sizes[split]
 
     if ds_name not in _REGISTRY:
         raise ValueError(f"Unknown dataset {ds_name}, please register")
@@ -114,7 +118,10 @@ def load_and_process_dataset(
     if take_test_from_train:
         both = results["train"]
         results["train"] = both.select(range(n_tr))
-        results["test"] = both.select(range(n_tr, n_tr + n_te))
+        start = n_tr
+        for split in EVAL_SPLITS:
+            results[split] = both.select(range(start, start + ns_eval[split]))
+            start += ns_eval[split]
     return results
 
 
@@ -182,32 +189,64 @@ def tokenize_dataset(
     return ds
 
 
-def hf_loader(*hf_name, split_names=None, n_test=None):
+def hf_loader(*hf_name, split_names: dict = None, split_sizes: dict = None, ds_cache = None):
     """
-    If `split_names` is provided, it maps from the requested
-    split name to the actual name in the hugginface dataset.
-    If `n_test` is provided, it will concatenate all splits together
-    and then take a deterministic test set of size `n_test` from it.
+    Maps from the requested
+    split names to the actual name in the hugginface dataset.
+    If multiple splits are mapped to the same huggingface split, that
+    hf split will be split deterministically into the requested sizes.
+    Sizes need to be provided for all splits after the first in each group.
     """
+
+    if split_names is None:
+        split_names = dict()
+
+    split_names = {
+        "train": "train",
+        "test": "test",
+        "val": "validation",
+        **split_names,
+    }
+    # invert the mapping while preserving the order
+    from_hf_names = {hf: [] for hf in set(split_names.values())}
+    for sp, hf in split_names.items():
+        from_hf_names[hf].append(sp)
+
+    if ds_cache is None:
+        ds_cache = {}
 
     # this thunk avoids loading datasets at import time
     def thunk(split):
-        nonlocal split_names
-        if n_test is not None:
-            assert split_names is None
-            ds = hf_load_dataset(*hf_name)
-            if isinstance(ds, HfDatasetDict):
-                ds = concatenate_datasets(ds.values())  # type: ignore
-            assert isinstance(ds, HfDataset)
-            # the seed is fixed so that all runs use the same test pool
-            splits = ds.train_test_split(test_size=n_test, seed=0)
+        # get all the splits that map to the same huggingface split
+        target = split_names[split]
+        friends = from_hf_names[target]
 
-            return splits[split]
+        if target in ds_cache:
+            ds = ds_cache[target]
+        else:
+            ds = hf_load_dataset(*hf_name, split=target)
+            ds_cache[target] = ds
+        
+        assert isinstance(ds, HfDataset), ds
 
-        if split_names is None:
-            split_names = dict()
-
-        return hf_load_dataset(*hf_name, split=split_names.get(split, split))
+        # if there are multiple splits mapped to the same huggingface split
+        if len(friends) > 1:
+            # check that the sizes are provided for all but the first split
+            assert all(f in split_sizes for f in friends[1:]), (split_names, from_hf_names, split_sizes)
+            # split the dataset deterministically from the end
+            for f in reversed(friends[1:]):
+                # always gives splits named "train" and "test"
+                splits = ds.train_test_split(test_size=split_sizes[f], seed=0)
+                # the requested split is car
+                if f == split:
+                    return splits["test"]
+                # the requested split is cdr
+                else:
+                    ds = splits["train"]
+            # if the requested split is the first in the group, return the train split
+            assert friends[0] == split
+            
+        return ds
 
     return thunk
 
@@ -229,7 +268,7 @@ register_dataset(
     "anli-r2",
     DatasetConfig(
         loader=hf_loader(
-            "facebook/anli", split_names=dict(train="train_r2", test="test_r2")
+            "facebook/anli", split_names=dict(train="train_r2", test="test_r2", val="dev_r2")
         ),  # type: ignore
         formatter=format_anli,  # type: ignore
     ),
@@ -243,9 +282,7 @@ def format_cola(ex, rng):
 register_dataset(
     "cola",
     DatasetConfig(
-        loader=hf_loader(
-            "nyu-mll/glue", "cola", split_names=dict(test="validation")
-        ),  # type: ignore
+        loader=hf_loader("nyu-mll/glue", "cola"),  # type: ignore
         formatter=format_cola,  # type: ignore
     ),
 )
@@ -355,7 +392,9 @@ register_dataset(
     "mc_taco",
     DatasetConfig(  # we switch train and test bc test is bigger
         loader=hf_loader(  # type: ignore
-            "mc_taco", split_names=dict(train="test", test="validation")
+            "mc_taco", 
+            split_names=dict(train="test", test="validation", val="validation"),
+            split_sizes=dict(val=1800), # no third split
         ),
         formatter=format_mc_taco,  # type: ignore
     ),
@@ -382,9 +421,7 @@ def format_hellaswag(ex, rng):
 register_dataset(
     "hellaswag",
     DatasetConfig(
-        loader=hf_loader(
-            "Rowan/hellaswag", split_names=dict(test="validation")
-        ),  # type: ignore
+        loader=hf_loader("Rowan/hellaswag"),  # type: ignore
         formatter=format_hellaswag,  # type: ignore
     ),
 )
@@ -400,9 +437,7 @@ def format_multirc(ex, rng):
 register_dataset(
     "multirc",
     DatasetConfig(
-        loader=hf_loader(
-            "super_glue", "multirc", split_names=dict(test="validation")
-        ),  # type: ignore
+        loader=hf_loader("super_glue", "multirc"),  # type: ignore
         formatter=format_multirc,  # type: ignore
     ),
 )
@@ -468,7 +503,7 @@ def format_piqa(ex, rng):
 register_dataset(
     "piqa",
     DatasetConfig(
-        loader=hf_loader("piqa", split_names=dict(test="validation")),  # type: ignore
+        loader=hf_loader("piqa"),  # type: ignore
         formatter=format_piqa,  # type: ignore
     ),
 )
@@ -491,7 +526,11 @@ def format_quail(ex, rng):
 register_dataset(
     "quail",
     DatasetConfig(
-        loader=hf_loader("quail", split_names=dict(test="validation")),  # type: ignore
+        loader=hf_loader(
+            "quail", 
+            split_names=dict(test="validation", val="validation"),
+            split_sizes=dict(val=1000), # "challenge" split too small
+        ),  # type: ignore
         formatter=format_quail,  # type: ignore
     ),
 )
@@ -540,7 +579,9 @@ register_dataset(
     "social_i_qa",
     DatasetConfig(
         loader=hf_loader(
-            "social_i_qa", split_names=dict(test="validation")
+            "social_i_qa", 
+            split_names=dict(test="validation", val="validation"),
+            split_sizes=dict(val=900), # no third split
         ),  # type: ignore
         formatter=format_social_i_qa,  # type: ignore
     ),
@@ -554,9 +595,7 @@ def format_sst2(ex, rng):
 register_dataset(
     "sst2",
     DatasetConfig(
-        loader=hf_loader(
-            "stanfordnlp/sst2", split_names=dict(test="validation")
-        ),  # type: ignore
+        loader=hf_loader("stanfordnlp/sst2"),  # type: ignore
         formatter=format_sst2,  # type: ignore
     ),
 )
@@ -573,9 +612,7 @@ def format_wic(ex, rng):
 register_dataset(
     "wic",
     DatasetConfig(
-        loader=hf_loader(
-            "super_glue", "wic", split_names=dict(test="validation")
-        ),  # type: ignore
+        loader=hf_loader("super_glue", "wic"),  # type: ignore
         formatter=format_wic,  # type: ignore
     ),
 )
@@ -588,13 +625,18 @@ def format_twitter_sentiment(ex, rng):
 register_dataset(
     "twitter-sentiment",
     DatasetConfig(
-        loader=hf_loader("EleutherAI/twitter-sentiment"),  # type: ignore
+        loader=hf_loader(
+            "EleutherAI/twitter-sentiment",
+            split_names=dict(test="test", val="test"),
+            split_sizes=dict(val=5000), # no third split
+        ),  # type: ignore
         formatter=format_twitter_sentiment,  # type: ignore
     ),
 )
 
 
-SCIQ_N_TEST = 3000
+# kept for reference but actually sciq's splits are fine already
+# SCIQ_N_TEST = 3000
 
 
 def format_sciq(ex, rng):
@@ -611,7 +653,7 @@ def format_sciq(ex, rng):
 register_dataset(
     "sciq",
     DatasetConfig(
-        loader=hf_loader("sciq", n_test=SCIQ_N_TEST),  # type: ignore
+        loader=hf_loader("sciq"),  # type: ignore
         formatter=format_sciq,  # type: ignore
     ),
 )
@@ -632,7 +674,7 @@ def format_sciq_for_lm_head(ex, rng):
 register_dataset(
     "sciq_for_lm_head",
     DatasetConfig(
-        loader=hf_loader("sciq", n_test=SCIQ_N_TEST),  # type: ignore
+        loader=hf_loader("sciq"),  # type: ignore
         formatter=format_sciq_for_lm_head,  # type: ignore
     ),
 )
@@ -657,7 +699,7 @@ def format_sciq_for_lm_head_with_support(ex, rng):
 register_dataset(
     "sciq_for_lm_head_with_support",
     DatasetConfig(
-        loader=hf_loader("sciq", n_test=SCIQ_N_TEST),  # type: ignore
+        loader=hf_loader("sciq"),  # type: ignore
         formatter=format_sciq_for_lm_head_with_support,  # type: ignore
     ),
 )
@@ -681,7 +723,7 @@ def format_sciq_with_support(ex, rng):
 register_dataset(
     "sciq_with_support",
     DatasetConfig(
-        loader=hf_loader("sciq", n_test=SCIQ_N_TEST),  # type: ignore
+        loader=hf_loader("sciq"),  # type: ignore
         formatter=format_sciq_with_support,  # type: ignore
     ),
 )
@@ -696,7 +738,11 @@ def format_anthropic_hh(ex, rng):
 register_dataset(
     "anthropic_hh",
     DatasetConfig(
-        loader=hf_loader("Anthropic/hh-rlhf"),  # type: ignore
+        loader=hf_loader(
+            "Anthropic/hh-rlhf",
+            split_names=dict(test="test", val="test"),
+            split_sizes=dict(val=4000), # no third split
+        ),  # type: ignore
         formatter=format_anthropic_hh,  # type: ignore
     ),
 )
@@ -721,9 +767,7 @@ def format_cosmosqa(ex, rng):
 register_dataset(
     "cosmos_qa",
     DatasetConfig(
-        loader=hf_loader(
-            "cosmos_qa", split_names=dict(test="validation")
-        ),  # type: ignore
+        loader=hf_loader("cosmos_qa"),  # type: ignore
         formatter=format_cosmosqa,  # type: ignore
     ),
 )
@@ -738,7 +782,10 @@ def format_boolq(ex, rng):
 register_dataset(
     "boolq",
     DatasetConfig(
-        loader=hf_loader("boolq", split_names=dict(test="validation")),  # type: ignore
+        loader=hf_loader("boolq", 
+            split_names=dict(test="validation", val="validation"),
+            split_sizes=dict(val=1600), # no third split
+        ),  # type: ignore
         formatter=format_boolq,  # type: ignore
     ),
 )

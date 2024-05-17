@@ -103,7 +103,7 @@ def train(cfg: TrainConfig):
         weak_tokenizer.pad_token = weak_tokenizer.eos_token
 
     splits = load_and_process_dataset(
-        cfg.dataset, split_sizes=dict(train=20_000, test=1_000)
+        cfg.dataset, split_sizes=dict(train=20_000, test=1_000, val=1_000)
     )
 
     def init_strong_model(name):
@@ -127,14 +127,18 @@ def train(cfg: TrainConfig):
         )
 
     cols = ["hard_label", "txt"]
-    test = splits["test"].select_columns(cols)
     train = splits["train"].select_columns(cols)
+    val = splits["val"].select_columns(cols)
+    test = splits["test"].select_columns(cols)
     print(f"Train example:\n\n{train[0]['txt']}\n\nLabel: {train[0]['hard_label']}")
 
-    weak_test = test.map(weak_processor, batched=True).cast_column(
+    weak_train = train.map(weak_processor, batched=True).cast_column(
         "labels", Value("int64")
     )
-    weak_train = train.map(weak_processor, batched=True).cast_column(
+    weak_val = val.map(weak_processor, batched=True).cast_column(
+        "labels", Value("int64")
+    )
+    weak_test = test.map(weak_processor, batched=True).cast_column(
         "labels", Value("int64")
     )
 
@@ -148,7 +152,8 @@ def train(cfg: TrainConfig):
         label_names=["labels"],
         load_best_model_at_end=True,
         logging_steps=50,
-        metric_for_best_model="auroc",
+        metric_for_best_model="val_loss",
+        greater_is_better=False,
         per_device_train_batch_size=cfg.minibatch_size,
         per_device_eval_batch_size=cfg.minibatch_size,
         run_name=cfg.dataset + "/floor" + cfg.run_name,
@@ -162,9 +167,10 @@ def train(cfg: TrainConfig):
 
     # Gather weak labels
     label_dir = root / "floor/preds"
-    if label_dir.exists():
+    if label_dir.exists() and all((label_dir / f"{s}.pt").exists() for s in ["train", "val", "test"]):
         print(f"Loading weak labels from {label_dir}")
         train_probs = torch.load(label_dir / "train.pt")
+        val_probs = torch.load(label_dir / "val.pt")
         test_probs = torch.load(label_dir / "test.pt")
     else:
         should_train = True
@@ -191,7 +197,7 @@ def train(cfg: TrainConfig):
             args=TrainingArguments(**train_cfg),  # type: ignore
             compute_metrics=compute_metrics,
             data_collator=DataCollatorWithPadding(weak_tokenizer),
-            eval_dataset=weak_test,
+            eval_dataset={"val": weak_val, "test": weak_test},
             model=weak_model,
             tokenizer=weak_tokenizer,
             train_dataset=weak_train,
@@ -204,14 +210,17 @@ def train(cfg: TrainConfig):
 
         print("Gathering weak labels")
         train_logits = trainer.predict(weak_train).predictions
+        val_logits = trainer.predict(weak_val).predictions
         test_logits = trainer.predict(weak_test).predictions
 
         # Convert to probabilities, then keep only the positive probs
         train_probs = torch.from_numpy(train_logits).softmax(-1)[:, 1]
+        val_probs = torch.from_numpy(val_logits).softmax(-1)[:, 1]
         test_probs = torch.from_numpy(test_logits).softmax(-1)[:, 1]
 
         label_dir.mkdir(parents=True, exist_ok=True)
         torch.save(train_probs, label_dir / "train.pt")
+        torch.save(val_probs, label_dir / "val.pt")
         torch.save(test_probs, label_dir / "test.pt")
 
     def strong_processor(examples, tokenizer):
@@ -219,6 +228,16 @@ def train(cfg: TrainConfig):
 
     strong_trains = {
         name: train.map(
+            strong_processor,
+            batched=True,
+            fn_kwargs={"tokenizer": strong_tokenizers[name]},
+        )
+        .rename_column("hard_label", "labels")
+        .cast_column("labels", Value("int64"))
+        for name in STRONG_NAMES
+    }
+    strong_vals = {
+        name: val.map(
             strong_processor,
             batched=True,
             fn_kwargs={"tokenizer": strong_tokenizers[name]},
@@ -250,7 +269,7 @@ def train(cfg: TrainConfig):
             args=TrainingArguments(**train_cfg),  # type: ignore
             compute_metrics=compute_metrics,
             data_collator=DataCollatorWithPadding(strong_tokenizers[MAIN_STRONG_NAME]),
-            eval_dataset=ceil_tests[MAIN_STRONG_NAME],
+            eval_dataset={"val": strong_vals[MAIN_STRONG_NAME], "test": ceil_tests[MAIN_STRONG_NAME]},
             model=get_peft_model(init_strong_model(MAIN_STRONG_NAME), lora_cfg),
             tokenizer=strong_tokenizers[MAIN_STRONG_NAME],
             train_dataset=strong_trains[MAIN_STRONG_NAME],
@@ -262,6 +281,8 @@ def train(cfg: TrainConfig):
     # Weak to strong generalization
     w2s_train = strong_trains[MAIN_STRONG_NAME].remove_columns("labels")
     w2s_train = w2s_train.add_column("labels", train_probs.numpy())
+    w2s_val = strong_vals[MAIN_STRONG_NAME].remove_columns("labels")
+    w2s_val = w2s_val.add_column("labels", val_probs.numpy())
 
     # Check gt metrics every 100 steps during w2s training.
     # We can overfit to the weak labels before a single epoch.
@@ -307,7 +328,7 @@ def train(cfg: TrainConfig):
         args=TrainingArguments(**train_cfg),  # type: ignore
         compute_metrics=compute_metrics,
         data_collator=DataCollatorWithPadding(strong_tokenizers[MAIN_STRONG_NAME]),
-        eval_dataset=ceil_tests[MAIN_STRONG_NAME],
+        eval_dataset={"val": w2s_val, "test": ceil_tests[MAIN_STRONG_NAME]},
         model=w2s_model,
         tokenizer=strong_tokenizers[MAIN_STRONG_NAME],
         train_dataset=w2s_train,
@@ -320,7 +341,11 @@ def train(cfg: TrainConfig):
     # Save memory
     del w2s_model
 
-    preds_path = root / ("w2s" + cfg.run_name) / "preds.pt"
+    preds_dir = root / ("w2s" + cfg.run_name) / "preds"
+    # create if necessary
+    preds_dir.mkdir(parents=True, exist_ok=True)
+    train_preds_path =  preds_dir / "train.pt"
+    val_preds_path = preds_dir / "val.pt"
 
     # Strong to strong generalization
     for i in range(cfg.s2s_iter):
@@ -329,20 +354,30 @@ def train(cfg: TrainConfig):
 
         # Gather strong labels
         if preds_path.exists():
-            print(f"Loading strong preds from {preds_path}")
-            train_probs = torch.load(preds_path)
+            print(f"Loading strong preds from {train_preds_path} and {val_preds_path}")
+            train_probs = torch.load(train_preds_path)
+            val_probs = torch.load(val_preds_path)
         else:
             train_logits = trainer.predict(w2s_train).predictions
             train_probs = torch.from_numpy(train_logits).softmax(-1)[:, 1]
+            torch.save(train_probs, train_preds_path)
 
-            torch.save(train_probs, preds_path)
+            val_logits = trainer.predict(w2s_val).predictions
+            val_probs = torch.from_numpy(val_logits).softmax(-1)[:, 1]
+            torch.save(val_probs, val_preds_path)
 
         del trainer
 
-        w2s_train = (
+        s2s_train = (
             strong_trains[strong_name]
             .remove_columns("labels")
             .add_column("labels", train_probs.numpy())
+        )
+
+        s2s_val = (
+            strong_vals[strong_name]
+            .remove_columns("labels")
+            .add_column("labels", val_probs.numpy())
         )
 
         name = f"s2s_iter{i + 1}" + cfg.run_name
@@ -353,15 +388,18 @@ def train(cfg: TrainConfig):
             args=TrainingArguments(**train_cfg),  # type: ignore
             compute_metrics=compute_metrics,
             data_collator=DataCollatorWithPadding(strong_tokenizers[strong_name]),
-            eval_dataset=ceil_tests[strong_name],
+            eval_dataset={"val": s2s_val, "test": ceil_tests[strong_name]},
             model=get_peft_model(init_strong_model(strong_name), lora_cfg),
             tokenizer=strong_tokenizers[strong_name],
-            train_dataset=w2s_train,
+            train_dataset=s2s_train,
         )
         trainer.train()
         wandb.finish()
 
-        preds_path = root / name / "preds.pt"
+        preds_dir = root / name / "preds"
+        preds_dir.mkdir(parents=True, exist_ok=True)
+        train_preds_path = preds_dir / "train.pt"
+        val_preds_path = preds_dir / "val.pt"
 
 
 if __name__ == "__main__":
