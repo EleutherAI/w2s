@@ -85,9 +85,10 @@ def train(
 
     def compute_metrics(eval_pred):
         predictions, labels = map(torch.from_numpy, eval_pred)
+        hard_labels = (labels > 0.5).long()
         return dict(
-            accuracy=predictions.argmax(dim=1).eq(labels).float().mean(),
-            auroc=roc_auc(labels, predictions[:, 1]),
+            accuracy=predictions.argmax(dim=1).eq(hard_labels).float().mean(),
+            auroc=roc_auc(hard_labels, predictions[:, 1]),
         )
 
     trainer = CustomLossTrainer(
