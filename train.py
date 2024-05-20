@@ -58,7 +58,7 @@ class DistillationTrainer(Trainer):
 
         outputs = model(**inputs)
         loss = log_confidence_loss(
-            outputs.logits, labels, self.state.global_step, aux_coef=0.25
+            outputs.logits, labels, self.state.global_step, aux_coef=0.0
         )
 
         return (loss, outputs) if return_outputs else loss
@@ -107,7 +107,9 @@ def train(cfg: TrainConfig):
     }
 
     # for 2 strong models we do WEAK -> STRONG[0] -> STRONG[1] -> STRONG[0] -> ...
-    STRONG_NAMES = [cfg.strong_model, "mistralai/Mistral-7B-v0.1"]
+    STRONG_NAMES = [
+        cfg.strong_model,
+    ]  # "google/gemma-7b"]
     MAIN_STRONG_NAME = STRONG_NAMES[0]
     strong_tokenizers = {k: AutoTokenizer.from_pretrained(k) for k in STRONG_NAMES}
     weak_tokenizer = AutoTokenizer.from_pretrained(cfg.weak_name)
@@ -134,9 +136,10 @@ def train(cfg: TrainConfig):
 
     def compute_metrics(eval_pred):
         predictions, labels = map(torch.from_numpy, eval_pred)
+        hard_labels = (labels > 0.5).long()
         return dict(
-            accuracy=predictions.argmax(dim=1).eq((labels > 0.5).long()).float().mean(),
-            auroc=roc_auc(labels, predictions[:, 1]),
+            accuracy=predictions.argmax(dim=1).eq(hard_labels).float().mean(),
+            auroc=roc_auc(hard_labels, predictions[:, 1]),
         )
 
     splits = load_and_process_dataset(
@@ -168,16 +171,16 @@ def train(cfg: TrainConfig):
         "labels", Value("int64")
     )
 
-    root = Path("new-results") / cfg.dataset
+    root = Path("s2s-results") / cfg.dataset
     train_cfg = dict(
         output_dir=str(root / "floor"),
-        max_steps=400,
+        max_steps=1_000,
         adam_beta2=0.95,
         gradient_accumulation_steps=8 // cfg.minibatch_size,
         evaluation_strategy="epoch",
         label_names=["labels"],
-        load_best_model_at_end=False,
-        metric_for_best_model="val_accuracy",
+        load_best_model_at_end=True,
+        metric_for_best_model="val_auroc",
         greater_is_better=True,
         logging_steps=50,
         per_device_train_batch_size=cfg.minibatch_size,
@@ -234,7 +237,7 @@ def train(cfg: TrainConfig):
         if should_train:
             print("\n\033[32m===== Training weak model =====\033[0m")
             trainer.train()
-            wandb.config.update(train_cfg)
+            wandb.config.update(cfg.to_dict())
             wandb.finish()
             move_best_ckpt(trainer)
 
@@ -322,7 +325,7 @@ def train(cfg: TrainConfig):
             train_dataset=main_strong_train_union,
         )
         trainer.train()
-        wandb.config.update(train_cfg)
+        wandb.config.update(cfg.to_dict())
         wandb.finish()
         move_best_ckpt(trainer)
 
@@ -378,7 +381,7 @@ def train(cfg: TrainConfig):
         )
         if should_train:
             trainer.train()
-            wandb.config.update(train_cfg)
+            wandb.config.update(cfg.to_dict())
             wandb.finish()
             move_best_ckpt(trainer)
 
@@ -460,7 +463,7 @@ def train(cfg: TrainConfig):
                 train_dataset=s2s_train,
             )
             trainer.train()
-            wandb.config.update(train_cfg)
+            wandb.config.update(cfg.to_dict())
             wandb.finish()
             move_best_ckpt(trainer)
 

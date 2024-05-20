@@ -25,6 +25,8 @@ def roc_auc(y_true: Tensor, y_pred: Tensor) -> Tensor:
         )
     if y_true.dim() not in (1, 2):
         raise ValueError("y_true and y_pred should be 1D or 2D tensors")
+    if not ((y_true == 0) | (y_true == 1)).all():
+        raise ValueError("y_true should contain only 0s and 1s")
 
     # Sort y_pred in descending order and get indices
     indices = y_pred.argsort(descending=True, dim=-1)
