@@ -11,7 +11,7 @@ def log_confidence_loss(
     logits = logits.float()
     labels = labels.float()
 
-    coef = aux_coef * min(1.0, step / warmup_steps)
+    coef = aux_coef * min(1.0, step / warmup_steps) if warmup_steps > 0 else aux_coef
     preds = torch.softmax(logits, dim=-1)
 
     threshold = torch.quantile(preds[:, 0], labels.mean())

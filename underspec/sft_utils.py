@@ -29,15 +29,16 @@ def gather_hiddens(model: torch.nn.Module, dataset: Dataset):
 
 
 def move_best_ckpt(trainer: Trainer):
-    path = trainer.state.best_model_checkpoint
-    perf = trainer.state.best_metric
-    assert path is not None, "No best checkpoint found"
-    assert perf is not None, "No best metric"
+    if trainer.args.load_best_model_at_end:
+        path = trainer.state.best_model_checkpoint
+        perf = trainer.state.best_metric
+        assert path is not None, "No best checkpoint found"
+        assert perf is not None, "No best metric"
 
-    src = Path(path)
-    dest = src.parent / "best-ckpt"
-    src.rename(dest)
-    print(f"Best model (auroc {perf:.3f}) saved at: {dest}")
+        src = Path(path)
+        dest = src.parent / "best-ckpt"
+        src.rename(dest)
+        print(f"Best model (auroc {perf:.3f}) saved at: {dest}")
 
 
 def clear_mem(verbose: bool = False):
