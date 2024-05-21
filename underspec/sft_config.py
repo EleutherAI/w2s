@@ -33,7 +33,8 @@ class SFTConfig(Serializable):  # TODO: what is this for??
     logconf_warmup_steps: int = 200
     strong_weight: float = 0.5
     weight_decay: float = 0.1
-    lr: float = 3e-5
+    weak_lr: float = 5e-4
+    strong_lr: float = 8e-5
     load_best_model_at_end: bool = True
     metric_for_best_model: str = "val_auroc"
 

@@ -2,18 +2,18 @@ import subprocess
 from multiprocessing import Process
 
 # Define the datasets and respective GPU ids
-datasets = [
-    "boolq",
-    "anli-r2",
-    "cosmos_qa",
-    "mc_taco",
-    "sciq",
-    "paws",
-    "twitter-sentiment",
-    "wic",
+configs = [
+    ("boolq", 2),
+    ("anli-r2", 16),
+    ("cosmos_qa", 4),
+    ("mc_taco", 4),
+    ("sciq", 4),
+    ("paws", 16),
+    ("twitter-sentiment", 8),
+    ("wic", 8),
 ]
 
-gpu_ids = range(len(datasets))
+gpu_ids = range(len(configs))
 
 # Define the base command
 base_command = (
@@ -23,17 +23,20 @@ base_command = (
     "--weak_model_name Qwen/Qwen1.5-0.5B "
     "--strong_model_name meta-llama/Meta-Llama-3-8B "
     "--n_epochs 2 "
-    "--n_train 20_000 "
-    "--n_val 500 "
-    "--n_test 1000 "
+    "--n_train 10_000 "
+    "--n_val 1000 "
+    "--n_test 5_000 "
     "--n_predict 0 "
-    "--eval_every 25 "
-    "--save_every 25 "
-    "--logconf_warmup_steps 200 "
+    "--eval_every 100 "
+    "--save_every 100 "
+    "--save_total_limit 1 "
+    "--logconf_warmup_steps 80 "
     "--logconf_weight 0.5 "
     "--strong_weight 0.5 "
-    "--minibatch_size 4 "
-    '--run_name "logconf_no_warmup" '
+    "--minibatch_size {minibatch_size} "
+    "--weak_lr 5e-4 "
+    "--strong_lr 8e-5 "
+    '--run_name "3rd_term_warmup" '
 )
 
 
@@ -45,8 +48,10 @@ def run_command(command):
 processes = []
 
 # Loop over datasets and gpu_ids
-for dataset, gpu_id in zip(datasets, gpu_ids):
-    command = base_command.format(gpu_id=gpu_id, dataset=dataset)
+for (dataset, minibatch_size), gpu_id in zip(configs, gpu_ids):
+    command = base_command.format(
+        gpu_id=gpu_id, dataset=dataset, minibatch_size=minibatch_size
+    )
     print(f"Running command: {command}")  # Debug print
     p = Process(target=run_command, args=(command,))
     p.start()

@@ -62,4 +62,9 @@ def init_model_and_tokenizer(cfg: ModelConfig):
         lora_cfg = LoraConfig(target_modules=cfg.lora_modules)
         model = get_peft_model(model, lora_cfg)
 
+    # put all the trainable (e.g. LoRA) parameters in float32
+    for p in model.parameters():
+        if p.requires_grad:
+            p.data = p.data.float()
+
     return model, tokenizer

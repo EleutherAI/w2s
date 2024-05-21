@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Union
 
 import torch
-from datasets import DatasetDict, Value
+from datasets import DatasetDict
 from transformers import (
     DataCollatorWithPadding,
     Trainer,
@@ -87,7 +87,7 @@ def train(
         out = tokenizer(examples["txt"], truncation=True)
         return out
 
-    ds_dict = ds_dict.map(process, batched=True).cast_column("labels", Value("int64"))
+    ds_dict = ds_dict.map(process, batched=True)
 
     def compute_metrics(eval_pred):
         predictions, labels = map(torch.from_numpy, eval_pred)
@@ -126,13 +126,12 @@ def train(
         cfg["train_args"] = train_args.to_dict()
         cfg["logconf_weight"] = logconf_weight
         json.dump(cfg, f, indent=2)
+    wandb.config.update(cfg)
 
     # save predictions
     if predict_dict is not None:
         for name, predict_ds in predict_dict.items():
-            predict_ds = predict_ds.map(process, batched=True).cast_column(
-                "labels", Value("int64")
-            )
+            predict_ds = predict_ds.map(process, batched=True)
             print("Gathering predictions for", name)
             pred_logits = torch.from_numpy(trainer.predict(predict_ds).predictions)
             preds = pred_logits.softmax(-1)[:, 1].cpu().float().numpy()
