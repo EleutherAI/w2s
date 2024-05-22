@@ -271,6 +271,7 @@ def train(cfg: TrainConfig):
     w2s_train = strong_trains[MAIN_STRONG_NAME].remove_columns("labels")
     w2s_train = w2s_train.add_column("labels", train_probs.numpy())
 
+    # Prefix for run name
     x2s = "p2s" if cfg.probe2s else "w2s"
 
     # Check gt metrics every 100 steps during w2s training.
