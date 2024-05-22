@@ -4,7 +4,7 @@ from multiprocessing import Process
 # Define the datasets and respective GPU ids
 configs = [
     ("boolq", 2),
-    ("anli-r2", 16),
+    ("anli-r2", 8),
     ("cosmos_qa", 4),
     ("mc_taco", 4),
     ("sciq", 4),
@@ -31,12 +31,13 @@ base_command = (
     "--save_every 100 "
     "--save_total_limit 1 "
     "--logconf_warmup_steps 80 "
+    "--balance_batch "
     "--logconf_weight 0.5 "
     "--strong_weight 0.5 "
     "--minibatch_size {minibatch_size} "
     "--weak_lr 5e-4 "
     "--strong_lr 8e-5 "
-    '--run_name "3rd_term_warmup" '
+    '--run_name "stable_balanced_batch" '
 )
 
 

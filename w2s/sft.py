@@ -11,10 +11,10 @@ from transformers import (
 )
 
 import wandb
-from underspec.loss import log_confidence_loss
-from underspec.model import ModelConfig, init_model_and_tokenizer
-from underspec.roc_auc import roc_auc
-from underspec.sft_utils import (
+from w2s.loss import log_confidence_loss
+from w2s.model import ModelConfig, init_model_and_tokenizer
+from w2s.roc_auc import roc_auc
+from w2s.sft_utils import (
     clear_mem,
     get_gpu_mem_used,
     move_best_ckpt,
@@ -23,11 +23,17 @@ from underspec.sft_utils import (
 
 class CustomLossTrainer(Trainer):
     def __init__(
-        self, logconf_weight: float, logconf_warmup_steps: int, *args, **kwargs
+        self,
+        logconf_weight: float,
+        logconf_warmup_steps: int,
+        balance_batch: bool,
+        *args,
+        **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.logconf_weight = logconf_weight
         self.logconf_warmup_steps = logconf_warmup_steps
+        self.balance_batch = balance_batch
 
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.pop("labels").float()
@@ -40,6 +46,7 @@ class CustomLossTrainer(Trainer):
             self.state.global_step,
             aux_coef=self.logconf_weight,
             warmup_steps=self.logconf_warmup_steps,
+            balance_batch=self.balance_batch,
         )
 
         return (loss, outputs) if return_outputs else loss
@@ -52,6 +59,7 @@ def train(
     cfg: dict,
     logconf_weight: float = 0.0,
     logconf_warmup_steps: int = 200,
+    balance_batch: bool = False,
     predict_dict: Union[DatasetDict, dict, None] = None,
 ):
     """
@@ -59,12 +67,11 @@ def train(
         with columns "txt" and "labels"
     model_cfg: ModelConfig with the model name and whether to enable LoRA
     train_args: TrainingArguments with the training hyperparameters
-    logconf_weight: the weight for the log confidence loss
-    store_pre_hiddens: whether to store the hiddens (all layers,
-        final token position, on train set) before training
-    store_post_hiddens: whether to store the hiddens after training
     cfg: a dictionary containing all the relevant details for reproducibility.
         This will be updated with your train_args and model_cfg before saving.
+    logconf_weight: the weight for the log confidence loss
+    logconf_warmup_steps: the number of steps to linearly increase the logconf_weight
+    balance_batch: whether to balance the batch with the log confidence loss
 
     This function trains a model on ds_dict["train"], uses ds_dict["val"] for early stopping,
         and evaluates on ds_dict["test"].
@@ -100,6 +107,7 @@ def train(
     trainer = CustomLossTrainer(
         logconf_weight=logconf_weight,
         logconf_warmup_steps=logconf_warmup_steps,
+        balance_batch=balance_batch,
         args=train_args,
         compute_metrics=compute_metrics,
         data_collator=DataCollatorWithPadding(tokenizer),

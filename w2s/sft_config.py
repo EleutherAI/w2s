@@ -31,6 +31,7 @@ class SFTConfig(Serializable):  # TODO: what is this for??
     save_total_limit: Optional[int] = None
     logconf_weight: float = 0.5
     logconf_warmup_steps: int = 200
+    balance_batch: bool = False
     strong_weight: float = 0.5
     weight_decay: float = 0.1
     weak_lr: float = 5e-4

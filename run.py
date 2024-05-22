@@ -7,11 +7,11 @@ from transformers import (
     TrainingArguments,
 )
 
-from underspec.ds_registry import load_and_process_dataset
-from underspec.model import ModelConfig
-from underspec.sft import train
-from underspec.sft_config import SFTConfig
-from underspec.utils import get_config_foldername
+from w2s.ds_registry import load_and_process_dataset
+from w2s.model import ModelConfig
+from w2s.sft import train
+from w2s.sft_config import SFTConfig
+from w2s.utils import get_config_foldername
 
 
 def run_train(cfg: SFTConfig):
@@ -75,6 +75,7 @@ def run_train(cfg: SFTConfig):
         TrainingArguments(**train_args),
         cfg.to_dict(),
         predict_dict=weak_predict_dict,
+        balance_batch=cfg.balance_batch,
     )
 
     # train strong ceil
@@ -90,7 +91,13 @@ def run_train(cfg: SFTConfig):
             "test": splits["test"],
         }
     )
-    train(strong_ds_dict, model_cfg, TrainingArguments(**train_args), cfg.to_dict())
+    train(
+        strong_ds_dict,
+        model_cfg,
+        TrainingArguments(**train_args),
+        cfg.to_dict(),
+        balance_batch=cfg.balance_batch,
+    )
 
     # load weak predictions
     weak_preds_root = root / cfg_name / "weak" / "predictions"
@@ -129,6 +136,7 @@ def run_train(cfg: SFTConfig):
         predict_dict=w2s_predict_dict,
         logconf_weight=cfg.logconf_weight,
         logconf_warmup_steps=cfg.logconf_warmup_steps,
+        balance_batch=cfg.balance_batch,
     )
 
     # load w2s predictions, and balanced-harden them
@@ -190,6 +198,7 @@ def run_train(cfg: SFTConfig):
         cfg.to_dict(),
         logconf_weight=cfg.logconf_weight,
         logconf_warmup_steps=cfg.logconf_warmup_steps,
+        balance_batch=cfg.balance_batch,
     )
 
 

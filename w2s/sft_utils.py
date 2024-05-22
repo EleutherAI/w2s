@@ -7,7 +7,7 @@ from datasets import Dataset
 from tqdm import tqdm
 from transformers import PretrainedConfig, Trainer
 
-from underspec.utils import assert_type
+from w2s.utils import assert_type
 
 
 @torch.no_grad()
