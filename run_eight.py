@@ -30,14 +30,14 @@ base_command = (
     "--eval_every 100 "
     "--save_every 100 "
     "--save_total_limit 1 "
+    "--loss logconf "
     "--logconf_warmup_steps 80 "
     "--balance_batch "
     "--logconf_weight 0.5 "
-    "--strong_weight 0.5 "
     "--minibatch_size {minibatch_size} "
     "--weak_lr 5e-4 "
     "--strong_lr 8e-5 "
-    '--run_name "stable_balanced_batch" '
+    '--run_name "basic_w2s" '
 )
 
 

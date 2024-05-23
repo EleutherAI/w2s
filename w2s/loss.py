@@ -1,6 +1,26 @@
 import torch
 
 
+def confidence_window_loss(
+    logits,
+    labels,
+    radius: float = 0.15,
+):
+    """
+    Use cross-entropy loss only for the examples where the model is uncertain.
+    """
+    logits = logits.float()
+    labels = labels.float()
+
+    preds = torch.softmax(logits, dim=-1)
+
+    uncertain = (preds.max(dim=-1).values < 0.5 + radius)
+
+    target = torch.stack([1.0 - labels, labels], dim=1)
+
+    return torch.nn.functional.cross_entropy(logits[uncertain], target[uncertain])
+
+
 def log_confidence_loss(
     logits,
     labels,

@@ -1,8 +1,27 @@
 from dataclasses import dataclass
 from typing import Literal, Optional, Union
 
-from simple_parsing import Serializable, field
+from simple_parsing import Serializable, field, subgroups
 
+
+@dataclass
+class LossConfig(Serializable):
+    pass
+
+@dataclass
+class LogConfidenceLossConfig(LossConfig):
+    logconf_weight: float = 0.5
+    logconf_warmup_steps: int = 200
+    balance_batch: bool = False
+
+@dataclass
+class ConfidenceWindowLossConfig(LossConfig):
+    radius: float = 0.15
+
+LOSS_CONFIGS = {
+    "logconf": LogConfidenceLossConfig, 
+    "window": ConfidenceWindowLossConfig,
+}
 
 @dataclass
 class SFTConfig(Serializable):  # TODO: what is this for??
@@ -29,10 +48,7 @@ class SFTConfig(Serializable):  # TODO: what is this for??
     eval_every: int = 100  # steps
     save_every: int = 100  # steps
     save_total_limit: Optional[int] = None
-    logconf_weight: float = 0.5
-    logconf_warmup_steps: int = 200
-    balance_batch: bool = False
-    strong_weight: float = 0.5
+    loss: LossConfig = subgroups(LOSS_CONFIGS, default="logconf")
     weight_decay: float = 0.1
     weak_lr: float = 5e-4
     strong_lr: float = 8e-5
@@ -40,6 +56,7 @@ class SFTConfig(Serializable):  # TODO: what is this for??
     metric_for_best_model: str = "val_auroc"
 
     greater_is_better: bool = field(init=False)
+    loss_name: str = field(init=False)
 
     def __post_init__(self):
         if "loss" in self.metric_for_best_model:
@@ -52,6 +69,8 @@ class SFTConfig(Serializable):  # TODO: what is this for??
         else:
             raise ValueError(f"Unknown metric {self.metric_for_best_model}")
 
+        self.loss_name = {LOSS_CONFIGS[k]:k for k in LOSS_CONFIGS}[type(self.loss)]
+        
     def to_dict(self):
         irrelevant_fields = ["results_folder", "run_name", "minibatch_size"]
         return {k: v for k, v in vars(self).items() if k not in irrelevant_fields}

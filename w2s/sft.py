@@ -11,7 +11,7 @@ from transformers import (
 )
 
 import wandb
-from w2s.loss import log_confidence_loss
+from w2s.loss import log_confidence_loss, confidence_window_loss
 from w2s.model import ModelConfig, init_model_and_tokenizer
 from w2s.roc_auc import roc_auc
 from w2s.sft_utils import (
@@ -19,35 +19,45 @@ from w2s.sft_utils import (
     get_gpu_mem_used,
     move_best_ckpt,
 )
+from w2s.sft_config import LossConfig
 
 
 class CustomLossTrainer(Trainer):
     def __init__(
         self,
-        logconf_weight: float,
-        logconf_warmup_steps: int,
-        balance_batch: bool,
+        loss_name: str,
+        loss_cfg: LossConfig,
+        transfer: bool,
         *args,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self.logconf_weight = logconf_weight
-        self.logconf_warmup_steps = logconf_warmup_steps
-        self.balance_batch = balance_batch
+        self.loss_name = loss_name
+        self.loss_cfg = loss_cfg
+        self.transfer = transfer
 
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.pop("labels").float()
 
         outputs = model(**inputs)
 
-        loss = log_confidence_loss(
-            outputs.logits,
-            labels,
-            self.state.global_step,
-            aux_coef=self.logconf_weight,
-            warmup_steps=self.logconf_warmup_steps,
-            balance_batch=self.balance_batch,
-        )
+        if self.loss_name == 'logconf':
+            loss = log_confidence_loss(
+                outputs.logits,
+                labels,
+                self.state.global_step,
+                aux_coef=(self.loss_cfg.logconf_weight if self.transfer else 0.),
+                warmup_steps=self.loss_cfg.logconf_warmup_steps,
+                balance_batch=self.loss_cfg.balance_batch,
+            )
+        elif self.loss_name == 'window':
+            loss = confidence_window_loss(
+                outputs.logits,
+                labels,
+                radius=self.loss_cfg.radius,
+            )
+        else:
+            raise ValueError(f"Unknown loss function: {self.loss_name}")
 
         return (loss, outputs) if return_outputs else loss
 
@@ -57,9 +67,7 @@ def train(
     model_cfg: ModelConfig,
     train_args: TrainingArguments,
     cfg: dict,
-    logconf_weight: float = 0.0,
-    logconf_warmup_steps: int = 200,
-    balance_batch: bool = False,
+    transfer: bool,
     predict_dict: Union[DatasetDict, dict, None] = None,
 ):
     """
@@ -105,9 +113,9 @@ def train(
         )
 
     trainer = CustomLossTrainer(
-        logconf_weight=logconf_weight,
-        logconf_warmup_steps=logconf_warmup_steps,
-        balance_batch=balance_batch,
+        loss_name=cfg.loss_name,
+        loss_cfg=cfg.loss,
+        transfer=transfer,
         args=train_args,
         compute_metrics=compute_metrics,
         data_collator=DataCollatorWithPadding(tokenizer),

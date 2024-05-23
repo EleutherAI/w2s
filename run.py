@@ -74,8 +74,8 @@ def run_train(cfg: SFTConfig):
         model_cfg,
         TrainingArguments(**train_args),
         cfg.to_dict(),
+        transfer=False,
         predict_dict=weak_predict_dict,
-        balance_batch=cfg.balance_batch,
     )
 
     # train strong ceil
@@ -96,7 +96,7 @@ def run_train(cfg: SFTConfig):
         model_cfg,
         TrainingArguments(**train_args),
         cfg.to_dict(),
-        balance_batch=cfg.balance_batch,
+        transfer=False,
     )
 
     # load weak predictions
@@ -133,72 +133,7 @@ def run_train(cfg: SFTConfig):
         model_cfg,
         TrainingArguments(**train_args),
         cfg.to_dict(),
-        predict_dict=w2s_predict_dict,
-        logconf_weight=cfg.logconf_weight,
-        logconf_warmup_steps=cfg.logconf_warmup_steps,
-        balance_batch=cfg.balance_batch,
-    )
-
-    # load w2s predictions, and balanced-harden them
-    print("\n\033[32m===== Training (s+w)2s model =====\033[0m")
-    w2s_preds_root = root / cfg_name / "w2s" / "predictions"
-    w2s_train_preds_ds = load_from_disk(str(w2s_preds_root / "train")).with_format(
-        type="torch", columns=["soft_pred"]
-    )
-    w2s_val_preds_ds = load_from_disk(str(w2s_preds_root / "val")).with_format(
-        type="torch", columns=["soft_pred"]
-    )
-    prior = torch.tensor(splits["train"]["labels"]).float().mean()
-    thresh = torch.quantile(w2s_train_preds_ds["soft_pred"], 1 - prior)  # type: ignore
-    # set the label column of train to be (1 - a) * weak + a * hard_w2s
-    sw2s_train_labels = (
-        (
-            (1 - cfg.strong_weight) * torch.tensor(weak_train_preds_ds["soft_pred"])  # type: ignore
-            + cfg.strong_weight * (w2s_train_preds_ds["soft_pred"] > thresh).float()
-        )
-        .float()
-        .tolist()
-    )
-    sw2s_val_labels = (
-        (
-            (1 - cfg.strong_weight) * torch.tensor(weak_val_preds_ds["soft_pred"])  # type: ignore
-            + cfg.strong_weight * (w2s_val_preds_ds["soft_pred"] > thresh).float()
-        )
-        .float()
-        .tolist()
-    )
-
-    # train sw2s
-    model_cfg, run_name = get_model_and_run_name(cfg.strong_model_name, "sw2s")
-    train_args["run_name"] = run_name
-    train_args["output_dir"] = str(root / cfg_name / "sw2s")
-    train_args["learning_rate"] = cfg.strong_lr
-    sw2s_ds_dict = DatasetDict(
-        {
-            "train": (
-                splits["train"]
-                .remove_columns("labels")
-                .add_column("labels", sw2s_train_labels)  # type: ignore
-            ),
-            "val": (
-                splits["val"]
-                .remove_columns("labels")
-                .add_column("labels", sw2s_val_labels)  # type: ignore
-            ),
-            "test": splits["test"],
-        }
-    )
-    # assert (w2s_train_preds_ds["id"] == sw2s_ds_dict["train"]["id"])
-    # assert (w2s_val_preds_ds["id"] == sw2s_ds_dict["val"]["id"])
-
-    train(
-        sw2s_ds_dict,
-        model_cfg,
-        TrainingArguments(**train_args),
-        cfg.to_dict(),
-        logconf_weight=cfg.logconf_weight,
-        logconf_warmup_steps=cfg.logconf_warmup_steps,
-        balance_batch=cfg.balance_batch,
+        transfer=True,
     )
 
 
