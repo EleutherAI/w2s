@@ -12,7 +12,8 @@ license = {text = "MIT License"}
 dependencies = [
     "datasets",
     "torch",
-    "peft",
+    # 0.11.0 fixed dtype issue
+    "peft>=0.11.0",
     "scipy",
     "simple-parsing",
     # 4.0 introduced the breaking change of using return_dict=True by default
