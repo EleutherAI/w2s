@@ -4,6 +4,7 @@ from typing import Union
 
 import torch
 from datasets import DatasetDict
+from torch import nn, optim
 from transformers import (
     DataCollatorWithPadding,
     Trainer,
@@ -11,7 +12,7 @@ from transformers import (
 )
 
 import wandb
-from w2s.loss import log_confidence_loss
+from w2s.loss import log_entropy_loss
 from w2s.model import ModelConfig, init_model_and_tokenizer
 from w2s.roc_auc import roc_auc
 from w2s.sft_utils import (
@@ -21,12 +22,53 @@ from w2s.sft_utils import (
 )
 
 
+class Calibrator(nn.Module):
+    def __init__(self, n_components: int):
+        self.n_components = 3
+        self.scale = torch.ones(n_components)
+        self.bias = torch.arange(n_components) - n_components // 2
+        self.weight_logits = torch.zeros(n_components)
+
+    def forward(self, logits: torch.Tensor) -> torch.Tensor:
+        logodds = logits[:, 1] - logits[:, 0]
+        weights = torch.softmax(self.weight_logits, dim=0)
+        p = (torch.sigmoid(logodds[:, None] * self.scale + self.bias) * weights).sum(
+            dim=-1
+        )  # [b,]
+        return torch.stack([1 - p, p], dim=1)
+
+    def fit(self, logits: torch.Tensor, labels: torch.Tensor, max_iter: int = 100):
+        """Fit the mixture of sigmoids to data with LBFGS.
+
+        Args:
+            logits: Logits of shape [batch, 2].
+            labels: Binary labels of shape [batch].
+        """
+
+        opt = optim.LBFGS(
+            self.parameters(),
+            line_search_fn="strong_wolfe",
+            max_iter=max_iter,
+            tolerance_change=torch.finfo(logits.dtype).eps,
+            tolerance_grad=torch.finfo(logits.dtype).eps,
+        )
+
+        def closure():
+            opt.zero_grad()
+            loss = torch.nn.functional.cross_entropy(self(logits), labels)
+            loss.backward()
+            return float(loss)
+
+        opt.step(closure)
+
+
 class CustomLossTrainer(Trainer):
     def __init__(
         self,
         logconf_weight: float,
         logconf_warmup_steps: int,
         balance_batch: bool,
+        calibrate_every: int = 1_000_000,  # steps
         *args,
         **kwargs,
     ):
@@ -34,13 +76,19 @@ class CustomLossTrainer(Trainer):
         self.logconf_weight = logconf_weight
         self.logconf_warmup_steps = logconf_warmup_steps
         self.balance_batch = balance_batch
+        self.calibrator = Calibrator(n_components=3)
+        self.calibrate_every = calibrate_every
+        self.calibration_buffer = []
+        self.n_calib = 32
 
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.pop("labels").float()
 
         outputs = model(**inputs)
 
-        loss = log_confidence_loss(
+        self.maybe_fit_calibrator(outputs.logits.detach(), labels)
+
+        loss = log_entropy_loss(
             outputs.logits,
             labels,
             self.state.global_step,
@@ -50,6 +98,45 @@ class CustomLossTrainer(Trainer):
         )
 
         return (loss, outputs) if return_outputs else loss
+
+    def maybe_fit_calibrator(self, logits, labels):
+        # don't fite during eval
+        if not self.is_in_train or not self.model.training or self.state.max_steps < 1:
+            print(
+                "not self.is_in_train",
+                not self.is_in_train,
+                "not self.model.training",
+                not self.model.training,
+                "self.state.max_steps < 1",
+                self.state.max_steps < 1,
+            )
+            return
+
+        # fill up a buffer of confidently labeled examples
+        take_per_minibatch = (
+            self.n_calib
+            // (self.args.gradient_accumulation_steps * self.calibrate_every)
+            + 1
+        )
+        confidences = (labels - 0.5).abs()
+        take = torch.topk(confidences, take_per_minibatch).indices
+        self.calibration_buffer.extend(zip(logits[take], labels[take]))
+
+        self.calibration_buffer
+        if (
+            self.state.global_step % self.calibrate_every == 0
+            and self.calibration_buffer
+        ):
+            print(
+                f"(step {self.state.global_step}) calibrating "
+                f"using {len(self.calibration_buffer)} examples"
+            )
+            conf_logits, conf_labels = zip(*self.calibration_buffer)
+            conf_logits = torch.stack(conf_logits)
+            conf_labels = torch.stack(conf_labels)
+
+            self.calibrator.fit(conf_logits, conf_labels)
+            self.calibration_buffer = []
 
 
 def train(
