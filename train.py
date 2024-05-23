@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from datasets import Value, disable_caching
 from peft import (
     AutoPeftModelForSequenceClassification,
@@ -54,9 +55,10 @@ class DistillationTrainer(Trainer):
         labels = inputs.pop("labels").float()
 
         outputs = model(**inputs)
-
         labels = torch.stack([1.0 - labels, labels], dim=-1)
-        loss = torch.nn.functional.cross_entropy(outputs.logits, labels)
+
+        H = F.cross_entropy(outputs.logits, outputs.logits.softmax(-1))
+        loss = F.cross_entropy(outputs.logits, labels) - 0.75 * H
         return (loss, outputs) if return_outputs else loss
 
 
