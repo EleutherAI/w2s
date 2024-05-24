@@ -6,7 +6,9 @@ from simple_parsing import Serializable, field, subgroups
 
 @dataclass
 class LossConfig(Serializable):
-    pass
+    def to_dict(self):
+        irrelevant_fields = []
+        return {k: v for k, v in vars(self).items() if k not in irrelevant_fields}
 
 @dataclass
 class LogConfidenceLossConfig(LossConfig):

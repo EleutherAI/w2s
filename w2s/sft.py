@@ -54,7 +54,7 @@ class CustomLossTrainer(Trainer):
             loss = confidence_window_loss(
                 outputs.logits,
                 labels,
-                radius=self.loss_cfg.radius,
+                radius=(self.loss_cfg.radius if self.transfer else 0.51),
             )
         else:
             raise ValueError(f"Unknown loss function: {self.loss_name}")
@@ -113,8 +113,8 @@ def train(
         )
 
     trainer = CustomLossTrainer(
-        loss_name=cfg.loss_name,
-        loss_cfg=cfg.loss,
+        loss_name=cfg["loss_name"],
+        loss_cfg=cfg["loss"],
         transfer=transfer,
         args=train_args,
         compute_metrics=compute_metrics,
@@ -140,7 +140,8 @@ def train(
     with open(save_dir / "config.json", "w") as f:
         cfg["model"] = model_cfg.to_dict()
         cfg["train_args"] = train_args.to_dict()
-        cfg["logconf_weight"] = logconf_weight
+        cfg["transfer"] = transfer
+        cfg["loss"] = cfg["loss"].to_dict()
         json.dump(cfg, f, indent=2)
     wandb.config.update(cfg)
 

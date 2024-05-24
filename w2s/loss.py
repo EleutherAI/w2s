@@ -18,7 +18,13 @@ def confidence_window_loss(
 
     target = torch.stack([1.0 - labels, labels], dim=1)
 
-    return torch.nn.functional.cross_entropy(logits[uncertain], target[uncertain])
+    loss = torch.nn.functional.cross_entropy(
+        logits[uncertain], 
+        target[uncertain], 
+        reduction="sum"
+    )
+
+    return loss / logits.shape[0]
 
 
 def log_confidence_loss(

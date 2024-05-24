@@ -1,4 +1,5 @@
 from typing import Any, Type, TypeVar, cast
+from w2s.sft_config import LossConfig
 
 T = TypeVar("T")
 
@@ -10,6 +11,12 @@ def assert_type(typ: Type[T], obj: Any) -> T:
 
     return cast(typ, obj)
 
+NICKNAMES = {
+    "Qwen/Qwen1.5-0.5B": "Qw0.5",
+    "meta-llama/Meta-Llama-3-8B": "Ll8",
+    "./results": "rs",
+    "cosine": "c",
+}
 
 def get_config_foldername(config: dict) -> str:
     def shorten_key(key: str) -> str:
@@ -19,6 +26,8 @@ def get_config_foldername(config: dict) -> str:
         if isinstance(value, bool):
             return "1" if value else "0"
         elif isinstance(value, str):
+            if value in NICKNAMES:
+                return NICKNAMES[value]
             value = value.split("/")[-1]
             if "_" in value:
                 return "_".join(word[:4] for word in value.split("_"))
@@ -39,6 +48,8 @@ def flatten_dict(d: dict, parent_key: str = "", sep: str = "_") -> dict:
         new_key = parent_key + sep + k if parent_key else k
         if isinstance(v, dict):
             items.extend(flatten_dict(v, new_key, sep=sep).items())
+        elif isinstance(v, LossConfig):
+            items.extend(flatten_dict(v.to_dict(), new_key, sep=sep).items())
         else:
             items.append((new_key, v))
     return dict(items)
