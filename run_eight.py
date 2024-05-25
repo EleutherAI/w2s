@@ -3,6 +3,7 @@ from multiprocessing import Process
 from sys import argv
 
 # Define the datasets and respective GPU ids
+# list of tuples with dataset name and minibatch size
 configs = [
     ("boolq", 2),
     ("anli-r2", 8),
@@ -31,14 +32,12 @@ base_command = (
     "--eval_every 100 "
     "--save_every 100 "
     "--save_total_limit 1 "
-    "--loss logconf "
-    "--logconf_warmup_steps 80 "
-    "--balance_batch "
-    "--logconf_weight 0.5 "
+    "--loss window "
+    "--radius midweak "
     "--minibatch_size {minibatch_size} "
     "--weak_lr 5e-4 "
     "--strong_lr 8e-5 "
-    '--run_name "logconf4" '
+    '--run_name "mw_window" '
 )
 
 

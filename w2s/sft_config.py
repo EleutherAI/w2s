@@ -1,8 +1,13 @@
 from dataclasses import dataclass
-from typing import Literal, Optional, Union
+from typing import Optional, Union
+from enum import StrEnum
 
 from simple_parsing import Serializable, field, subgroups
 
+
+# simple_parsing doesn't like typing.Literal so I rolled my own
+# note: parens, not brackets
+literal = lambda *args: StrEnum("option", args)
 
 @dataclass
 class LossConfig(Serializable):
@@ -18,7 +23,7 @@ class LogConfidenceLossConfig(LossConfig):
 
 @dataclass
 class ConfidenceWindowLossConfig(LossConfig):
-    radius: float = 0.15
+    radius: Union[float, literal("midweak")] = 0.15
 
 LOSS_CONFIGS = {
     "logconf": LogConfidenceLossConfig, 
@@ -38,7 +43,7 @@ class SFTConfig(Serializable):  # TODO: what is this for??
     n_test: int = 1_000
     # when "train", it uses the training set to generate predictions
     # otherwise it uses n_predict held out examples
-    n_predict: Union[Literal["train"], int] = 0
+    n_predict: Union[literal("train"), int] = 0
     minibatch_size: int = 8
     # examples per update
     batch_size: int = 32

@@ -112,6 +112,11 @@ def train(
             auroc=roc_auc(hard_labels, predictions[:, 1]),
         )
 
+    if transfer and cfg["loss_name"] == "window" and cfg["loss"].radius == "midweak":
+        confs = torch.abs(torch.tensor(ds_dict["train"]["labels"]) - 0.5)
+        cfg["loss"].radius = confs.median().item()
+        print(f"Setting radius to {cfg['loss'].radius:.2f} based on median confidence in train set")
+
     trainer = CustomLossTrainer(
         loss_name=cfg["loss_name"],
         loss_cfg=cfg["loss"],
