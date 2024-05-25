@@ -33,11 +33,11 @@ base_command = (
     "--save_every 100 "
     "--save_total_limit 1 "
     "--loss window "
-    "--radius midweak "
+    "--radius .3 "
     "--minibatch_size {minibatch_size} "
     "--weak_lr 5e-4 "
     "--strong_lr 8e-5 "
-    '--run_name "mw_window" '
+    '--run_name "bigwindow" '
 )
 
 
