@@ -71,7 +71,7 @@ base_command = (
     "--minibatch_size {minibatch_size} "
     "--weak_lr 5e-4 "
     "--strong_lr 8e-5 "
-    '--run_name "weekend_{m}_{c}" '
+    '--run_name "tuesdebug_{m}_{c}" '
 )
 
 
