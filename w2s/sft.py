@@ -11,7 +11,7 @@ from transformers import (
 )
 
 import wandb
-from w2s.loss import log_confidence_loss, confidence_window_loss
+from w2s.loss import log_confidence_loss, confidence_window_loss, cross_entropy_loss
 from w2s.model import ModelConfig, init_model_and_tokenizer
 from w2s.roc_auc import roc_auc
 from w2s.sft_utils import (
@@ -49,6 +49,22 @@ class CustomLossTrainer(Trainer):
                 aux_coef=(self.loss_cfg.logconf_weight if self.transfer else 0.),
                 warmup_steps=self.loss_cfg.logconf_warmup_steps,
                 balance_batch=self.loss_cfg.balance_batch,
+                harden=True,
+            )
+        elif self.loss_name == 'entropy':
+            loss = log_confidence_loss(
+                outputs.logits,
+                labels,
+                self.state.global_step,
+                aux_coef=(self.loss_cfg.logconf_weight if self.transfer else 0.),
+                warmup_steps=self.loss_cfg.logconf_warmup_steps,
+                balance_batch=self.loss_cfg.balance_batch,
+                harden=False,
+            )
+        elif self.loss_name == 'xent':
+            loss = cross_entropy_loss(
+                outputs.logits,
+                labels,
             )
         elif self.loss_name == 'window':
             loss = confidence_window_loss(

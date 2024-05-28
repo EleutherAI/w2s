@@ -25,9 +25,19 @@ class LogConfidenceLossConfig(LossConfig):
 class ConfidenceWindowLossConfig(LossConfig):
     radius: Union[float, literal("midweak")] = 0.15
 
+@dataclass
+class LogEntropyLossConfig(LogConfidenceLossConfig):
+    pass
+
+@dataclass
+class CrossEntropyLossConfig(LossConfig):
+    pass
+
 LOSS_CONFIGS = {
     "logconf": LogConfidenceLossConfig, 
     "window": ConfidenceWindowLossConfig,
+    "entropy": LogEntropyLossConfig,
+    "xent": CrossEntropyLossConfig,
 }
 
 @dataclass

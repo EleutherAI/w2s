@@ -27,6 +27,17 @@ def confidence_window_loss(
     return loss / logits.shape[0]
 
 
+def cross_entropy_loss(
+    logits,
+    labels,
+):
+    logits = logits.float()
+    labels = labels.float()
+
+    target = torch.stack([1.0 - labels, labels], dim=1)
+    return torch.nn.functional.cross_entropy(logits, target)
+
+
 def log_confidence_loss(
     logits,
     labels,
@@ -34,6 +45,7 @@ def log_confidence_loss(
     warmup_steps: int = 200,
     aux_coef: float = 0.5,
     balance_batch: bool = False,
+    harden: bool = True,
 ):
     """
     This is similar to the loss in Burns et al., except that it also optionally
@@ -51,13 +63,17 @@ def log_confidence_loss(
     coef = aux_coef * min(1.0, step / warmup_steps) if warmup_steps > 0 else aux_coef
     preds = torch.softmax(logits, dim=-1)
 
-    threshold = torch.quantile(preds[:, 0], prior)
-    strong_preds = torch.cat(
-        [(preds[:, 0] >= threshold)[:, None], (preds[:, 0] < threshold)[:, None]],
-        dim=1,
-    )
+    if harden:
+        threshold = torch.quantile(preds[:, 0], prior)
+        target_preds = torch.cat(
+            [(preds[:, 0] >= threshold)[:, None], (preds[:, 0] < threshold)[:, None]],
+            dim=1,
+        )
+    else:
+        target_preds = preds
+
     labels_binary = torch.stack([1.0 - labels, labels], dim=1)
-    target = labels_binary * (1 - coef) + strong_preds.detach() * coef
+    target = labels_binary * (1 - coef) + target_preds.detach() * coef
     return torch.nn.functional.cross_entropy(logits, target)
 
 
