@@ -75,6 +75,8 @@ class SFTConfig(Serializable):  # TODO: what is this for??
     greater_is_better: bool = field(init=False)
     loss_name: str = field(init=False)
 
+    s2s_iters: int = 0
+
     def __post_init__(self):
         if "loss" in self.metric_for_best_model:
             self.greater_is_better = False
