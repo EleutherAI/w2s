@@ -3,12 +3,12 @@ from multiprocessing import Process
 
 # Define the datasets and respective GPU ids
 configs = [
-    # ("boolq", 2),
-    # ("anli-r2", 8),
-    # ("cosmos_qa", 4),
+    ("boolq", 2),
+    ("anli-r2", 8),
+    ("cosmos_qa", 4),
     ("mc_taco", 4),
     ("sciq", 4),
-    # ("paws", 16),
+    ("paws", 16),
     ("twitter-sentiment", 8),
     ("wic", 8),
 ]
@@ -31,12 +31,12 @@ base_command = (
     "--save_every 100 "
     "--save_total_limit 1 "
     "--logconf_warmup_steps 80 "
-    "--logconf_weight 0.75 "
+    "--logconf_weight 0.5 "
     "--strong_weight 0.5 "
     "--minibatch_size {minibatch_size} "
     "--weak_lr 5e-4 "
     "--strong_lr 8e-5 "
-    '--run_name "log_entropy" '
+    '--run_name "default_logconf" '
 )
 
 

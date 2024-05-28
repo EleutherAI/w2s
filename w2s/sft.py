@@ -12,7 +12,7 @@ from transformers import (
 )
 
 import wandb
-from w2s.loss import log_entropy_loss
+from w2s.loss import log_confidence_loss
 from w2s.model import ModelConfig, init_model_and_tokenizer
 from w2s.roc_auc import roc_auc
 from w2s.sft_utils import (
@@ -24,10 +24,14 @@ from w2s.sft_utils import (
 
 class Calibrator(nn.Module):
     def __init__(self, n_components: int):
+        super().__init__()
         self.n_components = 3
-        self.scale = torch.ones(n_components)
-        self.bias = torch.arange(n_components) - n_components // 2
-        self.weight_logits = torch.zeros(n_components)
+        self.scale = nn.Parameter(torch.ones(n_components, device="cuda"))
+        self.bias = nn.Parameter(
+            torch.arange(n_components, dtype=torch.float32, device="cuda")
+            - n_components // 2
+        )
+        self.weight_logits = nn.Parameter(torch.zeros(n_components, device="cuda"))
 
     def forward(self, logits: torch.Tensor) -> torch.Tensor:
         logodds = logits[:, 1] - logits[:, 0]
@@ -68,7 +72,7 @@ class CustomLossTrainer(Trainer):
         logconf_weight: float,
         logconf_warmup_steps: int,
         balance_batch: bool,
-        calibrate_every: int = 1_000_000,  # steps
+        calibrate_every: int = -1,  # steps
         *args,
         **kwargs,
     ):
@@ -88,7 +92,7 @@ class CustomLossTrainer(Trainer):
 
         self.maybe_fit_calibrator(outputs.logits.detach(), labels)
 
-        loss = log_entropy_loss(
+        loss = log_confidence_loss(
             outputs.logits,
             labels,
             self.state.global_step,
@@ -102,14 +106,8 @@ class CustomLossTrainer(Trainer):
     def maybe_fit_calibrator(self, logits, labels):
         # don't fite during eval
         if not self.is_in_train or not self.model.training or self.state.max_steps < 1:
-            print(
-                "not self.is_in_train",
-                not self.is_in_train,
-                "not self.model.training",
-                not self.model.training,
-                "self.state.max_steps < 1",
-                self.state.max_steps < 1,
-            )
+            return
+        if self.calibrate_every < 0:
             return
 
         # fill up a buffer of confidently labeled examples
