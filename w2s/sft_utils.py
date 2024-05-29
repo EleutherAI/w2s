@@ -7,7 +7,18 @@ from datasets import Dataset
 from tqdm import tqdm
 from transformers import PretrainedConfig, Trainer
 
+from w2s.roc_auc import roc_auc
 from w2s.utils import assert_type
+
+
+def compute_acc_and_auroc(eval_pred):
+    predictions, labels = map(torch.from_numpy, eval_pred)
+
+    hard_labels = (labels > 0.5).long()
+    return dict(
+        accuracy=predictions.argmax(dim=1).eq(hard_labels).float().mean(),
+        auroc=roc_auc(hard_labels, predictions[:, 1]),
+    )
 
 
 @torch.no_grad()
@@ -29,6 +40,19 @@ def gather_hiddens(model: torch.nn.Module, dataset: Dataset):
 
 
 def move_best_ckpt(trainer: Trainer):
+    checkpoints = list(Path(trainer.args.output_dir).glob("checkpoint-*"))
+    if not checkpoints:
+        print("No checkpoints found, saving final model")
+        trainer.save_model(f"{trainer.args.output_dir}/best-ckpt")
+        return
+
+    if not trainer.args.load_best_model_at_end or not checkpoints:
+        checkpoints = list(Path(trainer.args.output_dir).glob("checkpoint-*"))
+        # get the largest checkpoint
+        best_ckpt = max(checkpoints, key=lambda x: int(x.stem.split("-")[-1]))
+        best_ckpt.rename(Path(trainer.args.output_dir) / "best-ckpt")
+        return
+
     path = trainer.state.best_model_checkpoint
     perf = trainer.state.best_metric
     assert path is not None, "No best checkpoint found"

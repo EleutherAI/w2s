@@ -18,6 +18,8 @@ def roc_auc(y_true: Tensor, y_pred: Tensor) -> Tensor:
         Tensor: If the inputs are 1D, a scalar containing the ROC AUC. If they're 2D,
             a tensor of shape (N,) containing the ROC AUC for each dataset.
     """
+    y_true = torch.as_tensor(y_true).long()
+    y_pred = torch.as_tensor(y_pred)
     if y_true.shape != y_pred.shape:
         raise ValueError(
             f"y_true and y_pred should have the same shape; "

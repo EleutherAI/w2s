@@ -122,6 +122,7 @@ def load_and_process_dataset(
     """
     Returns a dict with keys 'train', 'val', 'test', and optionally 'predict', and dataset values
     Examples in 'test' split can never appear in 'train', 'val', or 'predict' on any run.
+    Columns: 'txt', 'hard_label' (0 or 1), 'id' (hash of 'txt')
     """
     split_sizes = dict(train=n_train + n_val, test=n_test)
     if n_predict != "train":
@@ -704,7 +705,7 @@ register_dataset(
 )
 
 
-def format_underspecified_amazon_polarity(ex, rng, use_gt=True):
+def format_misleading_amazon_polarity(ex, rng, use_gt=True):
     txt = f"{ex['title']} {ex['content']}\n\nDoes this review say the product was \"good\" or \"great\"?"  # noqa
     words = {"good", "great"}
     label = (
@@ -716,18 +717,18 @@ def format_underspecified_amazon_polarity(ex, rng, use_gt=True):
 
 
 register_dataset(
-    "amazon_polarity_gt",
+    "amazon_polarity_misleading",
     DatasetConfig(
         loader=hf_loader("amazon_polarity"),  # type: ignore
-        formatter=functools.partial(format_underspecified_amazon_polarity, use_gt=True),  # type: ignore  # noqa
+        formatter=functools.partial(format_misleading_amazon_polarity, use_gt=True),  # type: ignore  # noqa
     ),
 )
 
 register_dataset(
-    "amazon_polarity_weak",
+    "amazon_polarity_misleading_weak",
     DatasetConfig(
         loader=hf_loader("amazon_polarity"),  # type: ignore
-        formatter=functools.partial(format_underspecified_amazon_polarity, use_gt=False),  # type: ignore  # noqa
+        formatter=functools.partial(format_misleading_amazon_polarity, use_gt=False),  # type: ignore  # noqa
     ),
 )
 

@@ -1,8 +1,10 @@
 import json
+import math
 from pathlib import Path
+from typing import Dict, Optional, Union
 
 import torch
-from datasets import DatasetDict, Value
+from datasets import DatasetDict
 from transformers import (
     DataCollatorWithPadding,
     Trainer,
@@ -11,10 +13,10 @@ from transformers import (
 
 import wandb
 from w2s.loss import log_confidence_loss
-from w2s.model import ModelConfig, init_model_and_tokenizer
-from w2s.roc_auc import roc_auc
+from w2s.model import TransformerPredictor
 from w2s.sft_utils import (
     clear_mem,
+    compute_acc_and_auroc,
     gather_hiddens,
     get_gpu_mem_used,
     move_best_ckpt,
@@ -31,29 +33,36 @@ class CustomLossTrainer(Trainer):
 
         outputs = model(**inputs)
         if self.loss_name == "xent":
-            labels = torch.stack([1.0 - labels, labels], dim=-1)
-            loss = torch.nn.functional.cross_entropy(outputs.logits, labels)
+            aux_weight = 0
         elif self.loss_name == "logconf":
-            loss = log_confidence_loss(outputs.logits, labels, self.state.global_step)
+            aux_weight = 0.5
         else:
             raise ValueError(f"Unknown loss: {self.loss_name}")
+
+        # print the current learning rate
+        print(f"Current learning rate: {self.optimizer.param_groups[0]['lr']}")  # type: ignore
+        loss = log_confidence_loss(
+            outputs.logits, labels, self.state.global_step, aux_coef=aux_weight
+        )
 
         return (loss, outputs) if return_outputs else loss
 
 
-def train(
+def lm_sft(
     ds_dict: DatasetDict,
-    model_cfg: ModelConfig,
+    model: TransformerPredictor,
     train_args: TrainingArguments,
     loss: str,
     store_pre_hiddens: bool,
     store_post_hiddens: bool,
     cfg: dict,
-):
+    predict_dict: Union[None, Dict, DatasetDict] = None,
+    resume_from_checkpoint: Optional[str] = None,
+) -> None:
     """
-    ds_dict: DatasetDict with splits for train, val, test, and (optionally) predict,
+    ds_dict: DatasetDict with splits for train, val, test,
         with columns "txt" and "labels"
-    model_cfg: ModelConfig with the model name and whether to enable LoRA
+    model: TransformerPredictor model
     train_args: TrainingArguments with the training hyperparameters
     loss: a string indicating the loss function to use
     store_pre_hiddens: whether to store the hiddens (all layers,
@@ -66,80 +75,106 @@ def train(
         and evaluates on ds_dict["test"].
     It also optionally predicts on ds_dict["predict"] and saves the predictions.
     """
+    save_dir = Path(train_args.output_dir)
+
     clear_mem()
     print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use before training")
 
-    save_dir = Path(train_args.output_dir)
-    results_path = save_dir / "results.json"
-    if results_path.exists():
-        print(f"Results already exist at {results_path}. Skipping training.")
-        return
+    keep_cols = {"labels", "input_ids", "attention_mask"}
 
-    model, tokenizer = init_model_and_tokenizer(model_cfg)
+    def preprocess(exs):
+        out = model.tokenizer(exs["txt"], truncation=True)
+        return {k: v for k, v in out.items() if k in keep_cols}
 
-    def process(examples):
-        out = tokenizer(examples["txt"], truncation=True)
-        return out
-
-    ds_dict = ds_dict.map(process, batched=True).cast_column("labels", Value("int64"))
-
-    def compute_metrics(eval_pred):
-        predictions, labels = map(torch.from_numpy, eval_pred)
-        hard_labels = (labels > 0.5).long()
-        return dict(
-            accuracy=predictions.argmax(dim=1).eq(hard_labels).float().mean(),
-            auroc=roc_auc(hard_labels, predictions[:, 1]),
-        )
+    ds_dict.reset_format()
+    ds_dict = ds_dict.map(
+        preprocess,
+        batched=True,
+        remove_columns=list(set(ds_dict["train"].column_names) - keep_cols),
+    )
 
     trainer = CustomLossTrainer(
         loss_name=loss,
         args=train_args,
-        compute_metrics=compute_metrics,
-        data_collator=DataCollatorWithPadding(tokenizer),
-        eval_dataset=ds_dict[
-            "val"
-        ],  # TODO make sure this doesn't use ground truth labels for w2s runs
-        model=model,
-        tokenizer=tokenizer,
+        compute_metrics=compute_acc_and_auroc,
+        data_collator=DataCollatorWithPadding(model.tokenizer),
+        eval_dataset={
+            k: ds_dict[k] for k in {"val", "test"}.intersection(ds_dict.keys())
+        },
+        model=model.transformer,
+        tokenizer=model.tokenizer,
         train_dataset=ds_dict["train"],
     )
+
+    results_path = save_dir / "config.json"
+    if results_path.exists() and (save_dir / "best-ckpt").exists():
+        print(
+            f"Results for sft run already exist at {results_path}. "
+            "Skipping training and evaluation. Loading the saved model."
+        )
+        trainer.state.best_model_checkpoint = str(save_dir / "best-ckpt")
+        trainer._load_best_model()
+        return
 
     # store pre hiddens
     if store_pre_hiddens:
         print("Gathering hiddens")
-        hiddens = gather_hiddens(model, ds_dict["train"])
+        hiddens = gather_hiddens(model.transformer, ds_dict["train"])
         torch.save(hiddens, save_dir / "pre_hiddens.pt")
 
-    print("\n\033[32m===== Training weak model =====\033[0m")
     # train
-    trainer.train()
+    if resume_from_checkpoint is not None:
+        # NOTE: this is a hack to get the trainer to load the optimizer state but not the
+        # scheduler state or training state by overwriting/deleting them
+        with open(f"{resume_from_checkpoint}/trainer_state.json", "r") as f:
+            state = json.load(f)
+            state["global_step"] = 0
+            num_update_steps_per_epoch = len(ds_dict["train"]) // (
+                train_args.gradient_accumulation_steps
+                * train_args.per_device_train_batch_size
+            )
+            num_update_steps_per_epoch = max(num_update_steps_per_epoch, 1)
+            state["max_steps"] = math.ceil(
+                train_args.num_train_epochs * num_update_steps_per_epoch
+            )
+            state["num_train_epochs"] = train_args.num_train_epochs
+            state["train_batch_size"] = train_args.per_device_train_batch_size
+
+        with open(f"{resume_from_checkpoint}/trainer_state.json", "w") as f:
+            json.dump(state, f, indent=2)
+
+        (Path(resume_from_checkpoint) / "scheduler.pt").unlink(missing_ok=True)
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
     # evaluate on test dataset
-    eval_results = trainer.evaluate(ds_dict["test"])  # type: ignore
-    wandb.finish()
-    move_best_ckpt(trainer)
+    if "test" in ds_dict:
+        eval_results = trainer.evaluate(ds_dict["test"])  # type: ignore
 
-    # save results
-    with open(results_path, "w") as f:
-        json.dump(eval_results, f, indent=2)
+        # save results
+        with open(results_path, "w") as f:
+            json.dump(eval_results, f, indent=2)
+    move_best_ckpt(trainer)
 
     # save config
     with open(save_dir / "config.json", "w") as f:
-        cfg["model"] = model_cfg.to_dict()
         cfg["train_args"] = train_args.to_dict()
         json.dump(cfg, f, indent=2)
+    wandb.config.update(cfg)
 
     # save predictions
-    if "predict" in ds_dict:
-        print("Gathering weak labels")
-        pred_logits: torch.Tensor = trainer.predict(ds_dict["predict"]).predictions  # type: ignore
-        preds = pred_logits.softmax(-1)[:, 1].cpu().float().numpy()
-        pred_ds = ds_dict["predict"].add_column("soft_pred", preds)  # type: ignore
-
-        pred_ds.save_to_disk(save_dir / "predictions")
+    if predict_dict is not None:
+        for name, predict_ds in predict_dict.items():
+            predict_ds = predict_ds.map(preprocess, batched=True)
+            print("Gathering predictions for", name)
+            pred_logits = torch.from_numpy(trainer.predict(predict_ds).predictions)
+            preds = pred_logits.softmax(-1).tolist()
+            pred_ds = predict_ds.add_column("soft_pred", preds)
+            pred_ds.save_to_disk(str(save_dir / "predictions" / name))
 
     # save hiddens
     if store_post_hiddens:
         print("Gathering hiddens")
-        hiddens = gather_hiddens(model, ds_dict["train"])
+        hiddens = gather_hiddens(model.transformer, ds_dict["train"])
         torch.save(hiddens, save_dir / "post_hiddens.pt")
+
+    wandb.finish()

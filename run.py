@@ -7,7 +7,7 @@ from transformers import (
 
 from w2s.ds_registry import load_and_process_dataset
 from w2s.model import ModelConfig
-from w2s.sft import train
+from w2s.sft import lm_sft
 from w2s.sft_config import SFTConfig
 from w2s.utils import get_config_foldername
 
@@ -52,7 +52,7 @@ def run_train(cfg: SFTConfig):
     )
 
     model_cfg = ModelConfig(name=cfg.model_name, enable_lora=not cfg.disable_lora)
-    train(
+    lm_sft(
         splits,
         model_cfg,
         train_args,
