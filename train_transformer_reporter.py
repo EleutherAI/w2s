@@ -23,7 +23,7 @@ def train_reporter_on_transformer(
     disable_lora: bool = False,
     # ExperimentConfig
     reporter_method: str = "SftReporter",
-    max_num_oracle: int = 256,
+    max_num_oracle: int = 16_000,
     results_folder: Optional[str] = None,
     run_name: str = "default",
     input_col: str = "txt",
@@ -51,12 +51,8 @@ def train_reporter_on_transformer(
     reporter_args["save_steps"] = reporter_args.get("save_steps", 50)
     reporter_args["logging_steps"] = reporter_args.get("logging_steps", 25)
     reporter_args["load_best_model_at_end"] = reporter_args.get(
-        "load_best_model_at_end", True
+        "load_best_model_at_end", False
     )
-    reporter_args["metric_for_best_model"] = reporter_args.get(
-        "metric_for_best_model", "val_loss"
-    )
-    reporter_args["greater_is_better"] = reporter_args.get("greater_is_better", False)
     reporter_args["save_total_limit"] = reporter_args.get("save_total_limit", 1)
     reporter_args["adam_beta2"] = reporter_args.get("adam_beta2", 0.95)
     reporter_args["tf32"] = reporter_args.get("tf32", True)

@@ -190,7 +190,7 @@ class SftReporter(Reporter):
                 store_post_hiddens=False,
                 cfg=self.to_dict(),
                 predict_dict=None,
-                resume_from_checkpoint=f"{self.weak_train_args['output_dir']}/best-ckpt",
+                resume_from_checkpoint=f"{self.weak_train_args['output_dir']}/best-ckpt/optimizer.pt",
             )
 
         return self

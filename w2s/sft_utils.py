@@ -44,6 +44,7 @@ def move_best_ckpt(trainer: Trainer):
     if not checkpoints:
         print("No checkpoints found, saving final model")
         trainer.save_model(f"{trainer.args.output_dir}/best-ckpt")
+        trainer._save_optimizer_and_scheduler(f"{trainer.args.output_dir}/best-ckpt")
         return
 
     if not trainer.args.load_best_model_at_end or not checkpoints:

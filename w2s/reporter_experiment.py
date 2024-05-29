@@ -47,8 +47,9 @@ def train_and_eval_reporter(
 
     # fit reporter, with various numbers of queries allowed to the oracle
     results = []
+    base = 4
     for num_queries in [0] + [
-        2**i for i in range(int(np.log2(cfg.max_num_oracle)) + 1)
+        base**i for i in range(1, int(np.log(cfg.max_num_oracle) / np.log(base)) + 1)
     ]:
         print(
             f"\n\033[32m===== Training reporter with {num_queries} oracle queries =====\033[0m"

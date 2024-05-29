@@ -1,5 +1,4 @@
 import json
-import math
 from pathlib import Path
 from typing import Dict, Optional, Union
 
@@ -24,11 +23,40 @@ from w2s.sft_utils import (
 
 
 class CustomLossTrainer(Trainer):
-    def __init__(self, loss_name: str, *args, **kwargs):
+    def __init__(
+        self,
+        loss_name: str,
+        *args,
+        resume_from_optimizer_checkpoint: Optional[str] = None,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.loss_name = loss_name
+        self.resume_from_optimizer_checkpoint = resume_from_optimizer_checkpoint
 
     def compute_loss(self, model, inputs, return_outputs=False):
+        if (
+            self.state.global_step == 0
+            and self.resume_from_optimizer_checkpoint is not None
+            and self.optimizer is not None
+        ):
+            # check if adam exp buffer is empty, and then load the optimizer state if it is
+            if not isinstance(self.optimizer, torch.optim.AdamW):
+                assert isinstance(self.optimizer.optimizer, torch.optim.AdamW)
+            self.optimizer: torch.optim.AdamW
+            state = self.optimizer.state[self.optimizer.param_groups[0]["params"][0]]
+            if "exp_avg" not in state:
+                # update the step, exp_avg, and exp_avg_sq of the optimizer state
+                state_dict = torch.load(
+                    self.resume_from_optimizer_checkpoint,
+                    map_location=self.model.device,
+                )["state"]
+                trainable_params = (
+                    p for p in self.model.parameters() if p.requires_grad
+                )
+                for state, p in zip(state_dict, trainable_params):  # type: ignore
+                    self.optimizer.state[p] = state  # type: ignore
+
         labels = inputs.pop("labels").float()
 
         outputs = model(**inputs)
@@ -39,7 +67,6 @@ class CustomLossTrainer(Trainer):
         else:
             raise ValueError(f"Unknown loss: {self.loss_name}")
 
-        # print the current learning rate
         loss = log_confidence_loss(
             outputs.logits, labels, self.state.global_step, aux_coef=aux_weight
         )
@@ -94,10 +121,11 @@ def lm_sft(
 
     trainer = CustomLossTrainer(
         loss_name=loss,
+        resume_from_optimizer_checkpoint=resume_from_checkpoint,
         args=train_args,
         compute_metrics=compute_acc_and_auroc,
         data_collator=DataCollatorWithPadding(
-            model.tokenizer, max_length=1024
+            model.tokenizer, max_length=1024, padding="max_length"
         ),  # NOTE: this could mess up some datasets
         eval_dataset={
             k: ds_dict[k] for k in {"val", "test"}.intersection(ds_dict.keys())
@@ -124,28 +152,11 @@ def lm_sft(
         torch.save(hiddens, save_dir / "pre_hiddens.pt")
 
     # train
-    if resume_from_checkpoint is not None:
-        # NOTE: this is a hack to get the trainer to load the optimizer state but not the
-        # scheduler state or training state by overwriting/deleting them
-        with open(f"{resume_from_checkpoint}/trainer_state.json", "r") as f:
-            state = json.load(f)
-            state["global_step"] = 0
-            num_update_steps_per_epoch = len(ds_dict["train"]) // (
-                train_args.gradient_accumulation_steps
-                * train_args.per_device_train_batch_size
-            )
-            num_update_steps_per_epoch = max(num_update_steps_per_epoch, 1)
-            state["max_steps"] = math.ceil(
-                train_args.num_train_epochs * num_update_steps_per_epoch
-            )
-            state["num_train_epochs"] = train_args.num_train_epochs
-            state["train_batch_size"] = train_args.per_device_train_batch_size
-
-        with open(f"{resume_from_checkpoint}/trainer_state.json", "w") as f:
-            json.dump(state, f, indent=2)
-
-        (Path(resume_from_checkpoint) / "scheduler.pt").unlink(missing_ok=True)
-    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    # if resume_from_checkpoint is not None:
+    #     # NOTE: this is a hack to get the trainer to load the optimizer state but not the
+    #     # scheduler state or training state
+    #     (Path(resume_from_checkpoint) / "scheduler.pt").unlink(missing_ok=True)
+    trainer.train()
 
     # evaluate on test dataset
     if "test" in ds_dict:
