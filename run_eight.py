@@ -3,7 +3,7 @@ from multiprocessing import Process
 
 # Define the datasets and respective GPU ids
 configs = [
-    (0, 0, "sft_0"),
+    (1, 0, "sft_0"),
     (128, 12, "sft_128"),
     (512, 6, "sft_512"),
     (2000, 3, "sft_2000"),
@@ -20,13 +20,13 @@ base_command = (
     "CUDA_VISIBLE_DEVICES={gpu_id} "
     "python train_transformer_reporter.py "
     "amazon_polarity_misleading "
-    "{n_train} 500 2000 "
+    "{n_train} 2000 "
     "--weak_model_name Qwen/Qwen1.5-0.5B "
     # "--strong_model_name meta-llama/Meta-Llama-3-8B "
     "--strong_model_name mistralai/Mistral-7B-v0.1 "
-    "--w2s_n_epochs {n_epochs} "
-    "--oracle_n_epochs 1 "
-    "--oracle_n_warmup_steps 0 "
+    "--w2s_num_train_epochs {n_epochs} "
+    "--oracle_num_train_epochs 1 "
+    "--oracle_warmup_steps 0 "
     "--load_best_model_at_end False "
     "--eval_steps 10 "
     "--save_steps 10 "

@@ -40,7 +40,6 @@ class CustomLossTrainer(Trainer):
             raise ValueError(f"Unknown loss: {self.loss_name}")
 
         # print the current learning rate
-        print(f"Current learning rate: {self.optimizer.param_groups[0]['lr']}")  # type: ignore
         loss = log_confidence_loss(
             outputs.logits, labels, self.state.global_step, aux_coef=aux_weight
         )
@@ -97,7 +96,9 @@ def lm_sft(
         loss_name=loss,
         args=train_args,
         compute_metrics=compute_acc_and_auroc,
-        data_collator=DataCollatorWithPadding(model.tokenizer),
+        data_collator=DataCollatorWithPadding(
+            model.tokenizer, max_length=1024
+        ),  # NOTE: this could mess up some datasets
         eval_dataset={
             k: ds_dict[k] for k in {"val", "test"}.intersection(ds_dict.keys())
         },

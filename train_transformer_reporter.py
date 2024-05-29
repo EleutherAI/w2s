@@ -2,7 +2,8 @@ from pathlib import Path
 from typing import Optional
 
 import fire
-from datasets import Dataset, DatasetDict, concatenate_datasets, load_from_disk
+import torch
+from datasets import Dataset, DatasetDict, load_from_disk
 from transformers import TrainingArguments
 
 from w2s.ds_registry import load_and_process_dataset
@@ -15,11 +16,10 @@ from w2s.utils import assert_type, split_args_by_prefix
 def train_reporter_on_transformer(
     ds_name: str,
     n_train: int,
-    n_val: int,  # note that this val set only affects floor and ceil
     n_test: int,
     # model config
     strong_model_name: str = "mistralai/Mistral-7B-v0.1",
-    weak_model_name: str = "qwen/Qwen1.5-0.5B",
+    weak_model_name: str = "Qwen/Qwen1.5-0.5B",
     disable_lora: bool = False,
     # ExperimentConfig
     reporter_method: str = "SftReporter",
@@ -61,6 +61,7 @@ def train_reporter_on_transformer(
     reporter_args["adam_beta2"] = reporter_args.get("adam_beta2", 0.95)
     reporter_args["tf32"] = reporter_args.get("tf32", True)
     reporter_args["label_names"] = reporter_args.get("label_names", ["labels"])
+    reporter_args["run_name"] = run_name
 
     # default to parent / "results"
     if results_folder is None:
@@ -72,9 +73,7 @@ def train_reporter_on_transformer(
     train_args = split_args_by_prefix(reporter_args, ("w2s_", "oracle_"))["w2s_"]
 
     # load dataset
-    source_ds = load_and_process_dataset(
-        ds_name, n_train, n_val, n_test, 0
-    ).with_format("torch", columns=["soft_label"])
+    source_ds = load_and_process_dataset(ds_name, n_train, 0, n_test, 0)
 
     # train weak floor, save predictions on train and test
     print("\n\033[32m===== Training weak model =====\033[0m")
@@ -85,9 +84,8 @@ def train_reporter_on_transformer(
     weak_args["output_dir"] = str(save_path / "weak")
     weak_args["learning_rate"] = MODEL_REGISTRY[weak_model_name]["lr"]
     ds_dict = DatasetDict(
-        train=source_ds["train"].add_column("labels", source_ds["train"]["soft_label"][:, 1].tolist()),  # type: ignore  # noqa
-        val=source_ds["val"].add_column("labels", source_ds["val"]["soft_label"][:, 1].tolist()),  # type: ignore  # noqa
-        test=source_ds["test"].add_column("labels", source_ds["test"]["soft_label"][:, 1].tolist()),  # type: ignore  # noqa
+        train=source_ds["train"].add_column("labels", torch.as_tensor(source_ds["train"]["soft_label"])[:, 1].tolist()),  # type: ignore  # noqa
+        test=source_ds["test"].add_column("labels", torch.as_tensor(source_ds["test"]["soft_label"])[:, 1].tolist()),  # type: ignore  # noqa
     )
     lm_sft(
         ds_dict=ds_dict,
@@ -119,13 +117,11 @@ def train_reporter_on_transformer(
         predict_dict=None,
     )
 
-    # use weak predictions (train and val) as both weak_ds and oracle_ds
+    # use weak predictions (train) as both weak_ds and oracle_ds
     # use weak predictions (test) as test_ds
     weak_ds_dir = save_path / "weak" / "predictions"
     # weak_ds has "id", input_col, and "soft_pred"
-    oracle_ds = concatenate_datasets(
-        [assert_type(Dataset, load_from_disk(str(weak_ds_dir / split))) for split in ["train", "val"]]  # type: ignore  # noqa
-    )
+    oracle_ds = assert_type(Dataset, load_from_disk(str(weak_ds_dir / "train")))
     # remove gt columns so they can't be used
     weak_ds = oracle_ds.remove_columns(["soft_label", "hard_label"])
     test_ds = assert_type(Dataset, load_from_disk(str(weak_ds_dir / "test")))
@@ -134,7 +130,7 @@ def train_reporter_on_transformer(
         "weak_ds_path": str(weak_ds_dir),
         "ds_name": ds_name,
         "n_train": n_train,
-        "n_val": n_val,
+        "n_val": 0,  # not used
         "n_test": n_test,
     }
 

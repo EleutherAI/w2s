@@ -60,12 +60,14 @@ class Reporter(ABC):
 
     weak_ds: Dataset
     oracle: Oracle
+    test_ds: Dataset
     strong_model: Predictor
 
     def __init__(
         self,
         weak_ds: Dataset,
         oracle: Oracle,
+        test_ds: Dataset,
         strong_model: Predictor,
         input_col: str = "txt",
         save_dir: str = "./results",
@@ -77,13 +79,13 @@ class Reporter(ABC):
         input_col: the column in weak_ds that contains the input
 
         """
-        weak_ds.set_format(type="torch", columns=[input_col])
         assert input_col in weak_ds.column_names
         assert "soft_pred" in weak_ds.column_names
         assert "id" in weak_ds.column_names
         self.weak_ds = weak_ds
 
         self.oracle = oracle
+        self.test_ds = test_ds
         self.strong_model = strong_model
         self.input_col = input_col
         self.save_dir = save_dir
@@ -118,13 +120,16 @@ class SftReporter(Reporter):
         self,
         weak_ds: Dataset,
         oracle: Oracle,
+        test_ds: Dataset,
         strong_model: TransformerPredictor,
         input_col: str = "txt",
         save_dir: str = "./results",
         **kwargs,
     ):
-        super().__init__(weak_ds, oracle, strong_model, input_col)
-        self.weak_ds = weak_ds.with_format("torch", columns=["soft_pred"])
+        super().__init__(weak_ds, oracle, test_ds, strong_model, input_col)
+        self.test_ds = self.test_ds.remove_columns(["labels"]).add_column(
+            "labels", torch.as_tensor(self.test_ds["soft_label"])[:, 1].tolist()
+        )  # type: ignore
         split_args = split_args_by_prefix(kwargs, ("w2s_", "oracle_"))
         for split in split_args:
             split_args[split][
@@ -135,16 +140,17 @@ class SftReporter(Reporter):
         self.weak_train_args = split_args["w2s_"]
         self.oracle_train_args = split_args["oracle_"]
 
-        assert input_col == "txt", "Only LM SFT is supported for now"
+        assert input_col == "txt", "Only LM SFT is supported"
 
     def fit(self, max_queries: int) -> "SftReporter":
-        weak_ds_dict = (
-            self.weak_ds.remove_columns(["labels"])  # type: ignore
-            .add_column("labels", self.weak_ds["soft_pred"][:, 1].tolist())  # type: ignore
-            .train_test_split(test_size=min(500, len(self.weak_ds) // 3))
+        weak_ds_dict = DatasetDict(
+            train=(
+                self.weak_ds.remove_columns(["labels"]).add_column(  # type: ignore
+                    "labels", torch.as_tensor(self.weak_ds["soft_pred"])[:, 1].tolist()
+                )
+            ),  # type: ignore
+            test=self.test_ds,
         )
-
-        weak_ds_dict["val"] = weak_ds_dict.pop("test")
         lm_sft(
             ds_dict=weak_ds_dict,
             model=self.strong_model,
@@ -167,13 +173,16 @@ class SftReporter(Reporter):
                 .remove_columns(["labels"])
             )
             oracle_ds = oracle_ds.add_column("labels", oracle_ds["soft_label"][:, 1].tolist())  # type: ignore  # noqa
+            oracle_dict = DatasetDict(
+                train=oracle_ds, test=self.test_ds  # type: ignore
+            )
             # add num_queries to the run name and output dir
             # the previous results will be cached, but these will not
             ota = self.oracle_train_args.copy()
             ota["run_name"] += f"_{max_queries}queries"
             ota["output_dir"] = f"{ota['output_dir']}_{max_queries}queries"
             lm_sft(
-                ds_dict=DatasetDict(train=oracle_ds),
+                ds_dict=oracle_dict,
                 model=self.strong_model,
                 train_args=TrainingArguments(**ota),
                 loss="xent",

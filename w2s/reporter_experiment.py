@@ -61,6 +61,7 @@ def train_and_eval_reporter(
         reporter = reporter_cls(
             weak_ds=weak_ds,
             oracle=Oracle(oracle_ds),
+            test_ds=test_ds,
             strong_model=strong_model,
             input_col=cfg.input_col,
             save_dir=str(Path(cfg.results_folder) / cfg.run_name),

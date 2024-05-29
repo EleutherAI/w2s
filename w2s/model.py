@@ -152,7 +152,7 @@ MODEL_REGISTRY = {
         "lr": 8e-5,
         "lora_modules": DEFAULT_LORA_MODULES,
     },
-    "qwen/Qwen1.5-0.5B": {
+    "Qwen/Qwen1.5-0.5B": {
         "lr": 5e-4,
         "lora_modules": DEFAULT_LORA_MODULES,
     },
