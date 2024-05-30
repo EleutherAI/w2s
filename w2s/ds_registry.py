@@ -636,17 +636,18 @@ register_dataset(
 
 
 def format_sciq_support_contains(ex, rng):
+    hard_label = int(rng.random() < 0.5)
+    if hard_label:
+        ans = ex["correct_answer"]
+    else:
+        ans = rng.choice([ex["distractor1"], ex["distractor2"], ex["distractor3"]])
+
     if ex["support"] == "":
         txt = ""  # skip empty examples
     else:
         template = (
             '{question}\n\n>>>{support}\n\nDoes the quoted text contain "{answer}"?'
         )
-        hard_label = int(rng.random() < 0.5)
-        if hard_label:
-            ans = ex["correct_answer"]
-        else:
-            ans = rng.choice([ex["distractor1"], ex["distractor2"], ex["distractor3"]])
         txt = template.format(
             support=ex["support"], question=ex["question"], answer=ans
         )

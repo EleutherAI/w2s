@@ -25,7 +25,10 @@ def main(n_train: int = 50_000, n_test: int = 5_000, results_folder=None):
     source_ds = load_and_process_dataset("sciq_support_contains", n_train, 0, n_test, 0)
 
     def does_support_contain(ex):
-        label = int(ex["anwer"].lower() in ex["support"].lower())
+        last_quote = ex["txt"].rfind('"')
+        second_to_last_quote = ex["txt"].rfind('"', 0, last_quote - 1)
+        ans = ex["txt"][second_to_last_quote + 1 : last_quote]
+        label = int(ans.lower() in ex["support"].lower())
         return {"soft_pred": [1 - label, label]}
 
     train_ds = source_ds["train"].map(does_support_contain)
