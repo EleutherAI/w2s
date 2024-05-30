@@ -54,7 +54,7 @@ class CustomLossTrainer(Trainer):
                 trainable_params = (
                     p for p in self.model.parameters() if p.requires_grad
                 )
-                for state, p in zip(state_dict, trainable_params):  # type: ignore
+                for state, p in zip(state_dict.values(), trainable_params):  # type: ignore
                     self.optimizer.state[p] = state  # type: ignore
 
         labels = inputs.pop("labels").float()
@@ -152,10 +152,6 @@ def lm_sft(
         torch.save(hiddens, save_dir / "pre_hiddens.pt")
 
     # train
-    # if resume_from_checkpoint is not None:
-    #     # NOTE: this is a hack to get the trainer to load the optimizer state but not the
-    #     # scheduler state or training state
-    #     (Path(resume_from_checkpoint) / "scheduler.pt").unlink(missing_ok=True)
     trainer.train()
 
     # evaluate on test dataset

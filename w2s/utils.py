@@ -1,5 +1,8 @@
 from typing import Any, Type, TypeVar, cast
 
+import torch
+from datasets import Dataset
+
 T = TypeVar("T")
 
 
@@ -57,3 +60,11 @@ def split_args_by_prefix(args: dict, prefixs: tuple) -> dict[str, dict]:
             {k[len(prefix) :]: v for k, v in args.items() if k.startswith(prefix)}
         )
     return prefix_args
+
+
+def ds_with_labels(ds: Dataset, labels_column: str = "soft_label"):
+    if "labels" in ds.column_names:
+        ds = ds.remove_columns("labels")
+    return ds.add_column(
+        "labels", torch.as_tensor(ds[labels_column])[:, 1].tolist()
+    )  # type: ignore

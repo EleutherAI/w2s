@@ -635,6 +635,33 @@ register_dataset(
 )
 
 
+def format_sciq_support_contains(ex, rng):
+    if ex["support"] == "":
+        txt = ""  # skip empty examples
+    else:
+        template = (
+            '{question}\n\n>>>{support}\n\nDoes the quoted text contain "{answer}"?'
+        )
+        hard_label = int(rng.random() < 0.5)
+        if hard_label:
+            ans = ex["correct_answer"]
+        else:
+            ans = rng.choice([ex["distractor1"], ex["distractor2"], ex["distractor3"]])
+        txt = template.format(
+            support=ex["support"], question=ex["question"], answer=ans
+        )
+    return dict(txt=txt, hard_label=hard_label)
+
+
+register_dataset(
+    "sciq_support_contains",
+    DatasetConfig(
+        loader=hf_loader("sciq", n_test=SCIQ_N_TEST),  # type: ignore
+        formatter=format_sciq_support_contains,  # type: ignore
+    ),
+)
+
+
 def format_anthropic_hh(ex, rng):
     hard_label = int(rng.random() < 0.5)
     txt = ex["chosen"] if hard_label else ex["rejected"]
@@ -732,6 +759,31 @@ register_dataset(
     ),
 )
 
+
+def format_title_only_amazon_polarity(ex, rng, use_misleading_template=False):
+    if use_misleading_template:
+        txt = f"{ex['content']}\n\nAbove is a review titled \"{ex['title']}\". Based only on the title, would you expect that the reviewer liked the product?"  # noqa
+    else:
+        txt = f"{ex['title']}\n\nIs this review positive?"
+
+    return dict(txt=txt, hard_label=ex["label"])
+
+
+register_dataset(
+    "amazon_polarity_title_only",
+    DatasetConfig(
+        loader=hf_loader("amazon_polarity"),  # type: ignore
+        formatter=functools.partial(format_title_only_amazon_polarity),  # type: ignore
+    ),
+)
+
+register_dataset(
+    "amazon_polarity_look_at_title",
+    DatasetConfig(
+        loader=hf_loader("amazon_polarity"),  # type: ignore
+        formatter=functools.partial(format_title_only_amazon_polarity, use_misleading_template=True),  # type: ignore  # noqa
+    ),
+)
 
 VALID_DATASETS: list[str] = list(_REGISTRY.keys())
 

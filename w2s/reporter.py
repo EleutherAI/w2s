@@ -5,11 +5,12 @@ from pathlib import Path
 import pandas as pd
 import torch
 from datasets import Dataset, DatasetDict
+from tqdm import tqdm
 from transformers import TrainingArguments
 
 from w2s.model import Predictor, TransformerPredictor
 from w2s.sft import lm_sft
-from w2s.utils import assert_type, split_args_by_prefix
+from w2s.utils import assert_type, ds_with_labels, split_args_by_prefix
 
 
 class Oracle:
@@ -127,9 +128,7 @@ class SftReporter(Reporter):
         **kwargs,
     ):
         super().__init__(weak_ds, oracle, test_ds, strong_model, input_col)
-        self.test_ds = self.test_ds.remove_columns(["labels"]).add_column(
-            "labels", torch.as_tensor(self.test_ds["soft_label"])[:, 1].tolist()
-        )  # type: ignore
+        self.test_ds = ds_with_labels(test_ds)
         split_args = split_args_by_prefix(kwargs, ("w2s_", "oracle_"))
         for split in split_args:
             split_args[split][
@@ -144,11 +143,7 @@ class SftReporter(Reporter):
 
     def fit(self, max_queries: int) -> "SftReporter":
         weak_ds_dict = DatasetDict(
-            train=(
-                self.weak_ds.remove_columns(["labels"]).add_column(  # type: ignore
-                    "labels", torch.as_tensor(self.weak_ds["soft_pred"])[:, 1].tolist()
-                )
-            ),  # type: ignore
+            train=ds_with_labels(self.weak_ds, labels_column="soft_pred"),
             test=self.test_ds,
         )
         lm_sft(
@@ -172,15 +167,23 @@ class SftReporter(Reporter):
                 .with_format("torch", columns=["soft_label"])
                 .remove_columns(["labels"])
             )
-            oracle_ds = oracle_ds.add_column("labels", oracle_ds["soft_label"][:, 1].tolist())  # type: ignore  # noqa
-            oracle_dict = DatasetDict(
-                train=oracle_ds, test=self.test_ds  # type: ignore
+
+            print(
+                f"\n\033[32m===== {len(oracle_ds)} oracle queries finetuning =====\033[0m"
             )
+            oracle_ds = ds_with_labels(oracle_ds)
             # add num_queries to the run name and output dir
             # the previous results will be cached, but these will not
             ota = self.oracle_train_args.copy()
             ota["run_name"] += f"_{max_queries}queries"
             ota["output_dir"] = f"{ota['output_dir']}_{max_queries}queries"
+            ota["eval_strategy"] = "no" if max_queries < 200 else "steps"
+            if max_queries < 200:
+                oracle_dict = DatasetDict(train=oracle_ds)
+            else:
+                oracle_dict = DatasetDict(
+                    train=oracle_ds, test=self.test_ds  # type: ignore
+                )
             lm_sft(
                 ds_dict=oracle_dict,
                 model=self.strong_model,
@@ -210,7 +213,7 @@ class SftReporter(Reporter):
         idxs = torch.arange(len(inputs))
         batches = torch.split(idxs, batch_size)
         logodds = []
-        for batch in batches:
+        for batch in tqdm(batches, desc="Calling reporter", disable=len(batches) < 5):
             logodds.append(self.strong_model(inputs[batch[0] : batch[-1] + 1]))
         return torch.cat(logodds)
 

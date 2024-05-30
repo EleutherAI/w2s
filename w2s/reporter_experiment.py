@@ -51,6 +51,16 @@ def train_and_eval_reporter(
     for num_queries in [0] + [
         base**i for i in range(1, int(np.log(cfg.max_num_oracle) / np.log(base)) + 1)
     ]:
+        curr_results_path = (
+            Path(cfg.results_folder) / cfg.run_name / f"results_{num_queries}.json"
+        )
+        if curr_results_path.exists():
+            print(
+                f"Results for {num_queries} queries already exist at {curr_results_path}."
+            )
+            with open(curr_results_path, "r") as f:
+                results.append(json.load(f))
+            continue
         print(
             f"\n\033[32m===== Training reporter with {num_queries} oracle queries =====\033[0m"
         )
@@ -94,21 +104,22 @@ def train_and_eval_reporter(
         else:
             weak_results = {}
 
-        results.append(
-            {
-                "ids": test_ds["id"],
-                "num_oracle": len(
-                    reporter.oracle.ids_labeled
-                ),  # could be diff from num_queries
-                "oracle_ids": reporter.oracle.ids_labeled,
-                "num_weak": len(weak_ds),
-                "calibrated_logodds": cal_logodds.tolist(),
-                "gt_soft_labels": gt_labels.tolist(),
-                "auroc": float(auc),
-                "accuracy": float(acc),
-                **weak_results,
-            }
-        )
+        result = {
+            "ids": test_ds["id"],
+            "num_oracle": len(
+                reporter.oracle.ids_labeled
+            ),  # could be diff from num_queries
+            "oracle_ids": list(reporter.oracle.ids_labeled),
+            "num_weak": len(weak_ds),
+            "calibrated_logodds": cal_logodds.tolist(),
+            "gt_soft_labels": gt_labels.tolist(),
+            "auroc": float(auc),
+            "accuracy": float(acc),
+            **weak_results,
+        }
+        with open(curr_results_path, "w") as f:
+            json.dump(result, f, indent=2)
+        results.append(result)
 
     # save configuration
     config: dict = {

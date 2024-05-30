@@ -1,42 +1,29 @@
-from dataclasses import dataclass
-from typing import Literal, Optional, Union
+from typing import Optional
 
-from simple_parsing import Serializable
+from w2s.model import MODEL_REGISTRY
 
 
-@dataclass
-class SFTConfig(Serializable):  # TODO: what is this for??
-    # name of the model to train
-    model_name: str
-    # name of the dataset to use
-    dataset: str
-    n_epochs: int = 2
-    n_train: int = 20_000
-    n_val: int = 500
-    n_test: int = 1_000
-    # this is typically used to generate weak labels
-    generate_predictions: bool = False
-    # when "train", it uses the training set to generate predictions
-    # otherwise it uses n_predict held out examples
-    n_predict: Union[Literal["train"], int] = 0
-    minibatch_size: int = 8
-    # examples per update
-    batch_size: int = 32
-    results_folder: str = "./results"
-    run_name: str = "default"
-    disable_lora: bool = False
-    lr_schedule: str = "cosine"
-    n_warmup_steps: int = 40  # 2 / (1 - 0.95) = 40
-    eval_every: int = 100  # steps
-    save_every: int = 100  # steps
-    save_total_limit: Optional[int] = None
-    loss: str = "xent"
-    # if true, it stores hiddens at all layers in "hiddens.pt" (also ids in "ids.pt")
-    store_pre_hiddens: bool = False
-    store_post_hiddens: bool = False
-    weight_decay: float = 0.1
-    lr: float = 3e-5
-
-    def to_dict(self):
-        irrelevant_fields = ["results_folder", "run_name", "minibatch_size"]
-        return {k: v for k, v in vars(self).items() if k not in irrelevant_fields}
+def set_default_args(args: dict, model_name: str, run_name: Optional[str] = None):
+    """Set default arguments for training a model."""
+    # set defaults
+    args["num_train_epochs"] = args.get("num_train_epochs", 1)
+    args["per_device_train_batch_size"] = args.get("per_device_train_batch_size", 32)
+    args["per_device_eval_batch_size"] = args.get("per_device_eval_batch_size", 256)
+    args["gradient_accumulation_steps"] = args.get("gradient_accumulation_steps", 1)
+    args["warmup_steps"] = args.get("warmup_steps", 40)
+    args["lr_scheduler_type"] = args.get("lr_scheduler_type", "cosine")
+    args["weight_decay"] = args.get("weight_decay", 0.01)
+    args["eval_strategy"] = args.get("eval_strategy", "steps")
+    args["eval_steps"] = args.get("eval_steps", 50)
+    args["save_strategy"] = args.get("save_strategy", "steps")
+    args["save_steps"] = args.get("save_steps", 50)
+    args["logging_steps"] = args.get("logging_steps", 25)
+    args["load_best_model_at_end"] = args.get("load_best_model_at_end", False)
+    args["save_total_limit"] = args.get("save_total_limit", 1)
+    args["adam_beta2"] = args.get("adam_beta2", 0.95)
+    args["tf32"] = args.get("tf32", True)
+    args["label_names"] = args.get("label_names", ["labels"])
+    args["learning_rate"] = args.get("learning_rate", MODEL_REGISTRY[model_name]["lr"])
+    if run_name is not None:
+        args["run_name"] = run_name
+    return args

@@ -1,38 +1,41 @@
 import subprocess
 from multiprocessing import Process
+from pathlib import Path
 
 # Define the datasets and respective GPU ids
 configs = [
-    (1, 0, "sft_0"),
-    (128, 12, "sft_128"),
-    (512, 6, "sft_512"),
-    (2000, 3, "sft_2000"),
-    (6000, 2, "sft_6000"),
-    (12000, 1, "sft_8000"),
-    (32000, 1, "sft_32000"),
-    (128000, 1, "sft_128000"),
+    (1, 0, "am_title_0"),
+    (32, 48, "am_title_32x48"),
+    (128, 12, "am_title_128x12"),
+    (512, 4, "am_title_512x4"),
+    (512, 1, "am_title_512"),
+    (2000, 1, "am_title_2000"),
+    (2000, 4, "sft_2000x4"),
+    (8000, 1, "sft_8000"),
 ]
 
-gpu_ids = range(len(configs))
+gpu_ids = [0, 1, 2, 3, 4, 5, 6, 7]
 
-# Define the base command
+
 base_command = (
     "CUDA_VISIBLE_DEVICES={gpu_id} "
     "python train_transformer_reporter.py "
-    "amazon_polarity_misleading "
-    "{n_train} 2000 "
-    "--weak_model_name Qwen/Qwen1.5-0.5B "
+    "{weak_ds_path} "
+    "{oracle_ds_path} "
+    "{test_ds_path} "
+    "{n_train} 2000 2000 "
     # "--strong_model_name meta-llama/Meta-Llama-3-8B "
     "--strong_model_name mistralai/Mistral-7B-v0.1 "
     "--w2s_num_train_epochs {n_epochs} "
     "--oracle_num_train_epochs 1 "
     "--oracle_warmup_steps 0 "
-    "--load_best_model_at_end False "
-    "--eval_steps 10 "
-    "--save_steps 10 "
+    "--eval_steps 50 "
+    "--save_steps 50 "
     "--save_total_limit 1 "
-    "--per_device_train_batch_size 4 "
-    "--gradient_accumulation_steps 8 "
+    "--per_device_train_batch_size 1 "
+    "--per_device_eval_batch_size 16 "
+    "--gradient_accumulation_steps 32 "
+    "--results_folder /mnt/ssd-1/alexm/w2s/results/amazon_polarity_title_only "
     '--run_name "{run_name}" '
 )
 
@@ -41,13 +44,36 @@ def run_command(command):
     subprocess.run(command, shell=True, check=True)
 
 
-# List to hold processes
+floor_command = (
+    "CUDA_VISIBLE_DEVICES=0 "
+    "python run_simple_sft.py "
+    "amazon_polarity_misleading "
+    "--per_device_train_batch_size 4 "
+    "--gradient_accumulation_steps 8 "
+)
+
+weak_ds_path = "/mnt/ssd-1/alexm/w2s/results/amazon_polarity_title_only/weak_train"
+oracle_ds_path = "/mnt/ssd-1/alexm/w2s/results/amazon_polarity_title_only/weak_train"
+test_ds_path = "/mnt/ssd-1/alexm/w2s/results/amazon_polarity_title_only/weak_test"
+
+if Path(weak_ds_path).is_dir():
+    print("Weak dataset exists, skipping floor model training")
+else:
+    print("Training weak floor model")
+    run_command(floor_command)
+
 processes = []
 
 # Loop over datasets and gpu_ids
 for gpu_id, (n_train, n_epochs, run_name) in zip(gpu_ids, configs):
     command = base_command.format(
-        gpu_id=gpu_id, n_train=n_train, run_name=run_name, n_epochs=n_epochs
+        gpu_id=gpu_id,
+        n_train=n_train,
+        run_name=run_name,
+        n_epochs=n_epochs,
+        weak_ds_path=weak_ds_path,
+        oracle_ds_path=oracle_ds_path,
+        test_ds_path=test_ds_path,
     )
     print(f"Running command: {command}")  # Debug print
     p = Process(target=run_command, args=(command,))
