@@ -5,11 +5,10 @@ from pathlib import Path
 import pandas as pd
 import torch
 from datasets import Dataset, DatasetDict
-from tqdm import tqdm
-from transformers import TrainingArguments
+from transformers import DataCollatorWithPadding, Trainer, TrainingArguments
 
 from w2s.model import Predictor, TransformerPredictor
-from w2s.sft import lm_sft
+from w2s.sft import lm_sft, prepare_for_trainer
 from w2s.utils import assert_type, ds_with_labels, split_args_by_prefix
 
 
@@ -162,11 +161,7 @@ class SftReporter(Reporter):
             random_oracle_ids = random.sample(
                 self.oracle.get_inputs().index.values.tolist(), max_queries
             )
-            oracle_ds = (
-                Dataset.from_pandas(self.oracle.query_ids(random_oracle_ids))
-                .with_format("torch", columns=["soft_label"])
-                .remove_columns(["labels"])
-            )
+            oracle_ds = Dataset.from_pandas(self.oracle.query_ids(random_oracle_ids))
 
             print(
                 f"\n\033[32m===== {len(oracle_ds)} oracle queries finetuning =====\033[0m"
@@ -206,16 +201,30 @@ class SftReporter(Reporter):
             "model": self.strong_model.to_dict(),
         }
 
-    def __call__(self, inputs: list, batch_size: int = 32) -> torch.Tensor:
+    def __call__(self, inputs: list) -> torch.Tensor:
         """
         Returns the logodds of the classifier's predictions
         """
-        idxs = torch.arange(len(inputs))
-        batches = torch.split(idxs, batch_size)
-        logodds = []
-        for batch in tqdm(batches, desc="Calling reporter", disable=len(batches) < 5):
-            logodds.append(self.strong_model(inputs[batch[0] : batch[-1] + 1]))
-        return torch.cat(logodds)
+        trainer = Trainer(
+            args=TrainingArguments(**self.weak_train_args),
+            data_collator=DataCollatorWithPadding(
+                self.strong_model.tokenizer, max_length=1024, padding="max_length"
+            ),  # NOTE: this could mess up some datasets
+            model=self.strong_model.transformer,
+            tokenizer=self.strong_model.tokenizer,
+        )
+        predict_ds = prepare_for_trainer(
+            Dataset.from_dict({self.input_col: inputs}), self.strong_model.tokenizer
+        )
+        pred_logits = torch.from_numpy(trainer.predict(predict_ds).predictions)  # type: ignore
+        return pred_logits.diff(dim=-1).squeeze()
+        # self.strong_model.transformer.eval()
+        # idxs = torch.arange(len(inputs))
+        # batches = torch.split(idxs, batch_size)
+        # logodds = []
+        # for batch in tqdm(batches, desc="Calling reporter", disable=len(batches) < 5):
+        #     logodds.append(self.strong_model(inputs[batch[0] : batch[-1] + 1]))
+        # return torch.cat(logodds)
 
 
 class DivDisReporter(Reporter):

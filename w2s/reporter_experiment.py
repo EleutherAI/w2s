@@ -80,9 +80,9 @@ def train_and_eval_reporter(
         )
 
         reporter.fit(num_queries)
-
         with torch.no_grad():
             cal_logodds = reporter(test_ds[reporter.input_col])  # type: ignore
+
         cal_logodds = cal_logodds.cpu().float().numpy()
         gt_labels = np.array(test_ds["soft_label"])[:, 1]
         if not ((gt_labels == 0) | (gt_labels == 1)).all():
@@ -95,8 +95,10 @@ def train_and_eval_reporter(
         if "soft_pred" in test_ds.column_names:
             weak_test_labels = np.array(test_ds["soft_pred"])[:, 1]
             weak_results = {
-                "weak_auc": float(roc_nan(weak_test_labels > 0.5, cal_logodds)),
-                "weak_acc": float(
+                "auroc_against_weak": float(
+                    roc_nan(weak_test_labels > 0.5, cal_logodds)
+                ),
+                "acc_against_weak": float(
                     ((cal_logodds > 0) == (weak_test_labels > 0.5)).mean()
                 ),
                 "weak_soft_labels": weak_test_labels.tolist(),
@@ -114,11 +116,25 @@ def train_and_eval_reporter(
             "calibrated_logodds": cal_logodds.tolist(),
             "gt_soft_labels": gt_labels.tolist(),
             "auroc": float(auc),
-            "accuracy": float(acc),
+            "acc": float(acc),
             **weak_results,
         }
         with open(curr_results_path, "w") as f:
             json.dump(result, f, indent=2)
+        print(
+            {
+                k: v
+                for k, v in result.items()
+                if k
+                not in [
+                    "calibrated_logodds",
+                    "gt_soft_labels",
+                    "weak_soft_labels",
+                    "ids",
+                    "oracle_ids",
+                ]
+            }
+        )
         results.append(result)
 
     # save configuration

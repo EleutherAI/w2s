@@ -1,23 +1,16 @@
 import subprocess
-
-# TODO:
-import time
 from multiprocessing import Process
 from pathlib import Path
 
-# sleep 5 hours
-time.sleep(18000)
-
-# Define the datasets and respective GPU ids
 configs = [
-    (1, 0, "ss_contains_0"),
-    (32, 48, "ss_contains_32x48"),
-    (128, 12, "ss_contains_128x12"),
-    (512, 4, "ss_contains_512x4"),
-    (512, 1, "ss_contains_512"),
-    (2000, 1, "ss_contains_2000"),
-    (2000, 4, "ss_contains_2000x4"),
-    (8000, 1, "ss_contains_8000"),
+    (1, 0, "ss_contains_0_matching"),
+    (32, 48, "ss_contains_32x48_matching"),
+    (128, 12, "ss_contains_128x12_matching"),
+    (512, 4, "ss_contains_512x4_matching"),
+    (512, 1, "ss_contains_512_matching"),
+    (2000, 1, "ss_contains_2000_matching"),
+    (2000, 4, "ss_contains_2000x4_matching"),
+    (8000, 1, "ss_contains_8000_matching"),
 ]
 
 gpu_ids = [0, 1, 2, 3, 4, 5, 6, 7]

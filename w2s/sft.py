@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Dict, Optional, Union
 
 import torch
-from datasets import DatasetDict
+from datasets import Dataset, DatasetDict
 from transformers import (
     DataCollatorWithPadding,
     Trainer,
@@ -14,6 +14,7 @@ import wandb
 from w2s.loss import log_confidence_loss
 from w2s.model import TransformerPredictor
 from w2s.sft_utils import (
+    assert_type,
     clear_mem,
     compute_acc_and_auroc,
     gather_hiddens,
@@ -74,6 +75,27 @@ class CustomLossTrainer(Trainer):
         return (loss, outputs) if return_outputs else loss
 
 
+def prepare_for_trainer(ds: Union[DatasetDict, Dataset], tokenizer):
+    keep_cols = {"labels", "input_ids", "attention_mask"}
+
+    def preprocess(exs):
+        out = tokenizer(exs["txt"], truncation=True)
+        return {k: v for k, v in out.items() if k in keep_cols}
+
+    ds.reset_format()
+    columns_names = (
+        ds.column_names
+        if isinstance(ds, Dataset)
+        else next(iter(ds.values())).column_names
+    )
+    ds = ds.map(
+        preprocess,
+        batched=True,
+        remove_columns=list(set(columns_names) - keep_cols),
+    )
+    return ds
+
+
 def lm_sft(
     ds_dict: DatasetDict,
     model: TransformerPredictor,
@@ -106,18 +128,7 @@ def lm_sft(
     clear_mem()
     print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use before training")
 
-    keep_cols = {"labels", "input_ids", "attention_mask"}
-
-    def preprocess(exs):
-        out = model.tokenizer(exs["txt"], truncation=True)
-        return {k: v for k, v in out.items() if k in keep_cols}
-
-    ds_dict.reset_format()
-    ds_dict = ds_dict.map(
-        preprocess,
-        batched=True,
-        remove_columns=list(set(ds_dict["train"].column_names) - keep_cols),
-    )
+    ds_dict = assert_type(DatasetDict, prepare_for_trainer(ds_dict, model.tokenizer))
 
     trainer = CustomLossTrainer(
         loss_name=loss,
@@ -172,11 +183,11 @@ def lm_sft(
     # save predictions
     if predict_dict is not None:
         for name, predict_ds in predict_dict.items():
-            predict_ds = predict_ds.map(preprocess, batched=True)
+            predict_ds = prepare_for_trainer(predict_ds, model.tokenizer)
             print("Gathering predictions for", name)
-            pred_logits = torch.from_numpy(trainer.predict(predict_ds).predictions)
+            pred_logits = torch.from_numpy(trainer.predict(predict_ds).predictions)  # type: ignore
             preds = pred_logits.softmax(-1).tolist()
-            pred_ds = predict_ds.add_column("soft_pred", preds)
+            pred_ds = predict_ds.add_column("soft_pred", preds)  # type: ignore
             pred_ds.save_to_disk(str(save_dir / "predictions" / name))
 
     # save hiddens

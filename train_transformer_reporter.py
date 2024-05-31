@@ -15,8 +15,8 @@ def train_reporter_on_transformer(
     oracle_ds_path: str,
     test_ds_path: str,
     n_train: int,
+    max_num_oracle: int,
     n_test: int,
-    max_num_oracle: int = 16_000,
     # model config
     strong_model_name: str = "meta-llama/Meta-Llama-3-8B",
     disable_lora: bool = False,
