@@ -108,16 +108,16 @@ def train_and_eval_reporter(
 
         result = {
             "ids": test_ds["id"],
+            "auroc": float(auc),
+            "acc": float(acc),
+            **weak_results,
+            "num_weak": len(weak_ds),
             "num_oracle": len(
                 reporter.oracle.ids_labeled
             ),  # could be diff from num_queries
             "oracle_ids": list(reporter.oracle.ids_labeled),
-            "num_weak": len(weak_ds),
             "calibrated_logodds": cal_logodds.tolist(),
             "gt_soft_labels": gt_labels.tolist(),
-            "auroc": float(auc),
-            "acc": float(acc),
-            **weak_results,
         }
         with open(curr_results_path, "w") as f:
             json.dump(result, f, indent=2)

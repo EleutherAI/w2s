@@ -172,8 +172,24 @@ class SftReporter(Reporter):
             ota = self.oracle_train_args.copy()
             ota["run_name"] += f"_{max_queries}queries"
             ota["output_dir"] = f"{ota['output_dir']}_{max_queries}queries"
-            ota["eval_strategy"] = "no" if max_queries < 200 else "steps"
-            if max_queries < 200:
+            max_use_test = 200
+            ota["eval_strategy"] = "no" if max_queries < max_use_test else "steps"
+            ota["num_train_epochs"] = {
+                1: 32,
+                2: 32,
+                4: 32,
+                8: 32,
+                16: 32,
+                32: 32,
+                64: 32,
+                128: 16,
+                256: 8,
+                512: 4,
+                1024: 2,
+                2048: 1,
+                4096: 1,
+            }[max_queries]
+            if max_queries < max_use_test:
                 oracle_dict = DatasetDict(train=oracle_ds)
             else:
                 oracle_dict = DatasetDict(

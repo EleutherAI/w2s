@@ -48,6 +48,10 @@ class CustomLossTrainer(Trainer):
             state = self.optimizer.state[self.optimizer.param_groups[0]["params"][0]]
             if "exp_avg" not in state:
                 # update the step, exp_avg, and exp_avg_sq of the optimizer state
+                print(
+                    "Loading optimizer state from",
+                    self.resume_from_optimizer_checkpoint,
+                )
                 state_dict = torch.load(
                     self.resume_from_optimizer_checkpoint,
                     map_location=self.model.device,
@@ -57,6 +61,7 @@ class CustomLossTrainer(Trainer):
                 )
                 for state, p in zip(state_dict.values(), trainable_params):  # type: ignore
                     self.optimizer.state[p] = state  # type: ignore
+                self.resume_from_optimizer_checkpoint = None
 
         labels = inputs.pop("labels").float()
 
