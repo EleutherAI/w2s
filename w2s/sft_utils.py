@@ -1,5 +1,6 @@
 import gc
 from pathlib import Path
+from enum import StrEnum
 
 import pynvml
 import torch
@@ -8,6 +9,11 @@ from tqdm import tqdm
 from transformers import PretrainedConfig, Trainer
 
 from w2s.utils import assert_type
+
+
+# simple_parsing doesn't like typing.Literal so I rolled my own
+# note: parens, not brackets
+literal = lambda *args: StrEnum("option", args)
 
 
 @torch.no_grad()

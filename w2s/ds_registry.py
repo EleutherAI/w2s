@@ -107,7 +107,7 @@ def load_and_process_train_test(
         # take the first n_test examples from the training set as the test set
         results["test"] = results["train"].select(range(n_test))
         results["train"] = results["train"].select(range(n_test, len(results["train"])))
-    return results
+    return results 
 
 
 def load_and_process_dataset(

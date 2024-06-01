@@ -1,4 +1,41 @@
 import torch
+from dataclasses import dataclass
+from typing import Optional, Union
+from w2s.sft_utils import literal
+
+from simple_parsing import Serializable
+
+
+@dataclass
+class LossConfig(Serializable):
+    def to_dict(self):
+        irrelevant_fields = []
+        return {k: v for k, v in vars(self).items() if k not in irrelevant_fields}
+
+@dataclass
+class LogConfidenceLossConfig(LossConfig):
+    logconf_weight: float = 0.5
+    logconf_warmup_steps: int = 200
+    balance_batch: bool = False
+
+@dataclass
+class ConfidenceWindowLossConfig(LossConfig):
+    radius: Union[float, literal("midweak")] = 0.15
+
+@dataclass
+class LogEntropyLossConfig(LogConfidenceLossConfig):
+    pass
+
+@dataclass
+class CrossEntropyLossConfig(LossConfig):
+    pass
+
+LOSS_CONFIGS = {
+    "logconf": LogConfidenceLossConfig, 
+    "window": ConfidenceWindowLossConfig,
+    "entropy": LogEntropyLossConfig,
+    "xent": CrossEntropyLossConfig,
+}
 
 
 def confidence_window_loss(

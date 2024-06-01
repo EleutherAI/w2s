@@ -21,12 +21,16 @@ def run_train(cfg: SFTConfig):
 
     cols = ["hard_label", "txt"]
     splits = splits.select_columns(cols).rename_column("hard_label", "labels")
+    for split in splits:
+        splits[split] = splits[split].add_column("gt_labels", splits[split]["labels"])
+
     print(
         f"Example:\n\n{splits['train'][0]['txt']}\n\nLabel: {splits['train'][0]['labels']}"
     )
 
     root = Path(cfg.results_folder) / cfg.run_name
-    cfg_name = get_config_foldername(vars(cfg))
+    shared_root = Path(cfg.results_folder) / cfg.shared_folder
+    cfg_name = cfg.dataset
     train_args: dict = dict(
         num_train_epochs=cfg.n_epochs,
         adam_beta2=0.95,
@@ -59,7 +63,7 @@ def run_train(cfg: SFTConfig):
     print("\n\033[32m===== Training weak model =====\033[0m")
     model_cfg, run_name = get_model_and_run_name(cfg.weak_model_name, "weak")
     train_args["run_name"] = run_name
-    train_args["output_dir"] = str(root / cfg_name / "weak")
+    train_args["output_dir"] = str(shared_root / cfg_name / "weak")
     train_args["learning_rate"] = cfg.weak_lr
     weak_ds_dict = DatasetDict(
         {
@@ -82,7 +86,7 @@ def run_train(cfg: SFTConfig):
     print("\n\033[32m===== Training strong model =====\033[0m")
     model_cfg, run_name = get_model_and_run_name(cfg.strong_model_name, "strong")
     train_args["run_name"] = run_name
-    train_args["output_dir"] = str(root / cfg_name / "strong")
+    train_args["output_dir"] = str(shared_root / cfg_name / "strong")
     train_args["learning_rate"] = cfg.strong_lr
     strong_ds_dict = DatasetDict(
         {
@@ -100,7 +104,7 @@ def run_train(cfg: SFTConfig):
     )
 
     # load weak predictions
-    weak_preds_root = root / cfg_name / "weak" / "predictions"
+    weak_preds_root = shared_root / cfg_name / "weak" / "predictions"
     weak_train_preds_ds = load_from_disk(str(weak_preds_root / "train"))
     weak_val_preds_ds = load_from_disk(str(weak_preds_root / "val"))
 
@@ -135,6 +139,7 @@ def run_train(cfg: SFTConfig):
         cfg.to_dict(),
         transfer=True,
         predict_dict=w2s_predict_dict,
+        save_activations=True,
     )
 
     prev = "w2s"

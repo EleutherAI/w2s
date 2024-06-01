@@ -18,8 +18,10 @@ from w2s.sft_utils import (
     clear_mem,
     get_gpu_mem_used,
     move_best_ckpt,
+    gather_hiddens,
 )
-from w2s.sft_config import LossConfig
+from w2s.loss import LossConfig
+from w2s.probe import PROBES
 
 
 class CustomLossTrainer(Trainer):
@@ -85,6 +87,8 @@ def train(
     cfg: dict,
     transfer: bool,
     predict_dict: Union[DatasetDict, dict, None] = None,
+    save_activations: bool = False,
+    use_probe: bool = False,
 ):
     """
     ds_dict: DatasetDict with splits for train, val, test, and (optionally) predict,
@@ -103,11 +107,7 @@ def train(
     """
     save_dir = Path(train_args.output_dir)
     results_path = save_dir / "results.json"
-    if results_path.exists():
-        print(
-            f"Results already exist at {results_path}. Skipping training and evaluation."
-        )
-        return
+    acts_dir = save_dir / "activations"
 
     clear_mem()
     print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use before training")
@@ -120,13 +120,61 @@ def train(
 
     ds_dict = ds_dict.map(process, batched=True)
 
-    def compute_metrics(eval_pred):
-        predictions, labels = map(torch.from_numpy, eval_pred)
+    def compute_metrics_torch(predictions, labels):
         hard_labels = (labels > 0.5).long()
         return dict(
             accuracy=predictions.argmax(dim=1).eq(hard_labels).float().mean(),
             auroc=roc_auc(hard_labels, predictions[:, 1]),
         )
+
+    def compute_metrics(eval_pred):
+        predictions, labels = map(torch.from_numpy, eval_pred)
+        return compute_metrics_torch(predictions, labels)
+
+    if save_activations:
+        if acts_dir.exists():
+            print("Activations already exist at", acts_dir)
+        else:
+            print("Saving activations to", acts_dir)
+            acts_dir.mkdir(parents=True, exist_ok=True)
+            for name, ds in ds_dict.items():
+                acts = gather_hiddens(model, ds)
+                torch.save(acts, acts_dir / f"{name}.pt")
+
+    if cfg.probe_relabel or cfg.probe_filter:
+        print("Training probe")
+        acts = torch.load(acts_dir / f"train.pt", map_location=model.device)
+        probe = PROBES[cfg["probe_name"]](cfg["probe"])
+        probe.fit(acts, torch.tensor(ds_dict["train"]["labels"]))
+        for name, ds in ds_dict.items():
+            acts = torch.load(acts_dir / f"{name}.pt", map_location=model.device)
+            preds = probe.predict(acts)
+            agree_metrics = compute_metrics_torch(preds, torch.tensor(ds["labels"]))
+            gt_metrics = compute_metrics_torch(preds, torch.tensor(ds["gt_labels"]))
+            with open(acts_dir / f"{name}_probe_metrics.json", "w") as f:
+                json.dump({"agree": agree_metrics, "gt": gt_metrics}, f, indent=2)
+            if name in ["train", "val"]:
+                if cfg.probe_filter:
+                    good_indices = probe.filter(acts, torch.tensor(ds["labels"]), cfg.contamination)
+                    sizes = {
+                        "before": len(ds),
+                        "after": len(good_indices),
+                        "removed": len(ds) - len(good_indices),
+                        "contamination": int(cfg.contamination * len(ds)),
+                    }
+                    with open(acts_dir / f"{name}_filter_sizes.json", "w") as f:
+                        json.dump(sizes, f, indent=2)
+                    ds = ds.select(good_indices)
+                    ds_dict[name] = ds
+                if cfg.probe_relabel:
+                    ds = ds.remove_columns("labels").add_column("labels", preds.numpy())
+                    ds_dict[name] = ds
+
+    if results_path.exists():
+        print(
+            f"Results already exist at {results_path}. Skipping training and evaluation."
+        )
+        return
 
     if transfer and cfg["loss_name"] == "window" and cfg["loss"].radius == "midweak":
         confs = torch.abs(torch.tensor(ds_dict["train"]["labels"]) - 0.5)

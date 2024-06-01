@@ -1,44 +1,12 @@
 from dataclasses import dataclass
 from typing import Optional, Union
-from enum import StrEnum
 
 from simple_parsing import Serializable, field, subgroups
+from w2s.loss import LOSS_CONFIGS, LossConfig
+from w2s.probe import PROBE_CONFIGS, ProbeConfig
+from w2s.sft_utils import literal
 
 
-# simple_parsing doesn't like typing.Literal so I rolled my own
-# note: parens, not brackets
-literal = lambda *args: StrEnum("option", args)
-
-@dataclass
-class LossConfig(Serializable):
-    def to_dict(self):
-        irrelevant_fields = []
-        return {k: v for k, v in vars(self).items() if k not in irrelevant_fields}
-
-@dataclass
-class LogConfidenceLossConfig(LossConfig):
-    logconf_weight: float = 0.5
-    logconf_warmup_steps: int = 200
-    balance_batch: bool = False
-
-@dataclass
-class ConfidenceWindowLossConfig(LossConfig):
-    radius: Union[float, literal("midweak")] = 0.15
-
-@dataclass
-class LogEntropyLossConfig(LogConfidenceLossConfig):
-    pass
-
-@dataclass
-class CrossEntropyLossConfig(LossConfig):
-    pass
-
-LOSS_CONFIGS = {
-    "logconf": LogConfidenceLossConfig, 
-    "window": ConfidenceWindowLossConfig,
-    "entropy": LogEntropyLossConfig,
-    "xent": CrossEntropyLossConfig,
-}
 
 @dataclass
 class SFTConfig(Serializable):  # TODO: what is this for??
@@ -59,23 +27,33 @@ class SFTConfig(Serializable):  # TODO: what is this for??
     batch_size: int = 32
     results_folder: str = "./results"
     run_name: str = "default"
+    shared_folder: str = "shared"
     disable_lora: bool = False
     lr_schedule: str = "cosine"
     n_warmup_steps: int = 40  # 2 / (1 - 0.95) = 40
     eval_every: int = 100  # steps
     save_every: int = 100  # steps
     save_total_limit: Optional[int] = None
-    loss: LossConfig = subgroups(LOSS_CONFIGS, default="logconf")
     weight_decay: float = 0.1
     weak_lr: float = 5e-4
     strong_lr: float = 8e-5
     load_best_model_at_end: bool = True
     metric_for_best_model: str = "val_auroc"
 
+    loss: LossConfig = subgroups(LOSS_CONFIGS, default="logconf")
+    probe: ProbeConfig = subgroups(PROBE_CONFIGS, default="knn")
+
+    probe_relabel: bool = False
+    probe_filter: bool = False
+    contamination: float = 0.1
+
     greater_is_better: bool = field(init=False)
     loss_name: str = field(init=False)
+    probe_name: str = field(init=False)
 
     s2s_iters: int = 0
+    save_strong_acts: bool = False
+
 
     def __post_init__(self):
         if "loss" in self.metric_for_best_model:
@@ -89,6 +67,7 @@ class SFTConfig(Serializable):  # TODO: what is this for??
             raise ValueError(f"Unknown metric {self.metric_for_best_model}")
 
         self.loss_name = {LOSS_CONFIGS[k]:k for k in LOSS_CONFIGS}[type(self.loss)]
+        self.probe_name = {PROBE_CONFIGS[k]:k for k in PROBE_CONFIGS}[type(self.probe)]
         
     def to_dict(self):
         irrelevant_fields = ["results_folder", "run_name", "minibatch_size"]
