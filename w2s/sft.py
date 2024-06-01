@@ -141,7 +141,7 @@ def train(
                 acts = gather_hiddens(model, ds)
                 torch.save(acts, acts_dir / f"{name}.pt")
 
-    if cfg.probe_relabel or cfg.probe_filter:
+    if transfer and (cfg.probe_relabel or cfg.probe_filter):
         print("Training probe")
         acts = torch.load(acts_dir / f"train.pt", map_location=model.device)
         probe = PROBES[cfg["probe_name"]](cfg["probe"])

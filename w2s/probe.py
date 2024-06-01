@@ -103,8 +103,8 @@ class TopoProbe(Probe):
         self.modified = config.modified
 
     def fit(self, acts, labels):
-        self.labels = labels
         self.acts = acts
+        self.labels = labels
 
     def predict(self, acts):
         return topolabel(self.acts, self.labels, acts, k_cc=self.k_cc, k_zeta=self.k_zeta)
