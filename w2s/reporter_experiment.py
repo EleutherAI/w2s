@@ -107,7 +107,6 @@ def train_and_eval_reporter(
             weak_results = {}
 
         result = {
-            "ids": test_ds["id"],
             "auroc": float(auc),
             "acc": float(acc),
             **weak_results,
@@ -116,6 +115,7 @@ def train_and_eval_reporter(
                 reporter.oracle.ids_labeled
             ),  # could be diff from num_queries
             "oracle_ids": list(reporter.oracle.ids_labeled),
+            "ids": test_ds["id"],
             "calibrated_logodds": cal_logodds.tolist(),
             "gt_soft_labels": gt_labels.tolist(),
         }

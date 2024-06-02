@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Optional
 
 import fire
+import torch
 from datasets import Dataset, load_from_disk
 
 from w2s.model import ModelConfig, TransformerPredictor
@@ -37,12 +38,21 @@ def train_reporter_on_transformer(
     reporter_args["output_dir"] = str(Path(results_folder) / run_name)
 
     # load datasets
-    weak_ds = assert_type(Dataset, load_from_disk(weak_ds_path)).select(range(n_train))
+    weak_ds = assert_type(Dataset, load_from_disk(weak_ds_path))
     weak_ds = weak_ds.remove_columns(["soft_label", "hard_label"])
     oracle_ds = assert_type(Dataset, load_from_disk(oracle_ds_path)).select(
         range(max_num_oracle)
     )
     test_ds = assert_type(Dataset, load_from_disk(test_ds_path)).select(range(n_test))
+
+    if reporter_method == "ActiveSftReporter":
+        print("Selecting examples with highest entropy for training.")
+        # select the weak examples with *highest* entropy (easy examples)
+        probs = torch.as_tensor(weak_ds["soft_pred"])
+        entropies = -(probs * torch.log(probs)).sum(dim=-1)
+        weak_ds = weak_ds.select((-entropies).argsort()[:n_train])
+    else:
+        weak_ds = weak_ds.select(range(n_train))
 
     dataset_cfg_dict = {
         "weak_ds_path": str(weak_ds_path),

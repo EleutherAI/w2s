@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Union
 
 import torch
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, TaskType, get_peft_model
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -40,6 +40,21 @@ class ModelConfig(PredictorConfig):
         return vars(self)
 
 
+class AutoCastingScore(torch.nn.Module):
+    def __init__(
+        self, score: torch.nn.Linear, output_dtype: torch.dtype = torch.bfloat16
+    ):
+        super().__init__()
+        # make a leaf tensor with the same data as score
+        self.weight = torch.nn.Parameter(score.weight.to(torch.float32).data)
+        self.output_dtype = output_dtype
+
+    def forward(self, hiddens):
+        return torch.nn.functional.linear(
+            hiddens.to(self.weight.dtype), self.weight, None
+        ).to(self.output_dtype)
+
+
 def init_model_and_tokenizer(cfg: ModelConfig):
     model = AutoModelForSequenceClassification.from_pretrained(
         cfg.name, torch_dtype="auto", device_map={"": "cuda"}
@@ -59,7 +74,22 @@ def init_model_and_tokenizer(cfg: ModelConfig):
     model.config.problem_type = "single_label_classification"
 
     if cfg.enable_lora:
-        lora_cfg = LoraConfig(target_modules=cfg.lora_modules)
+        lora_cfg = LoraConfig(
+            target_modules=cfg.lora_modules, task_type=TaskType.SEQ_CLS
+        )
+
+        # NOTE: adding task_type causes dtype errors, but is necessary for proper module saving
+        # and for making the lm head trainable, so we need to wrap it in an AutoCastingScore
+        for attr in ["score", "classifier"]:
+            if hasattr(model, attr):
+                setattr(
+                    model,
+                    attr,
+                    AutoCastingScore(getattr(model, attr), output_dtype=model.dtype),
+                )
+                break
+        else:
+            raise ValueError("Could not find classifier head in model.")
         model = get_peft_model(model, lora_cfg)
 
     # put all the trainable (e.g. LoRA) parameters in float32

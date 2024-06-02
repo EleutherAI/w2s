@@ -46,6 +46,7 @@ class CustomLossTrainer(Trainer):
                 assert isinstance(self.optimizer.optimizer, torch.optim.AdamW)
             self.optimizer: torch.optim.AdamW
             state = self.optimizer.state[self.optimizer.param_groups[0]["params"][0]]
+            breakpoint()
             if "exp_avg" not in state:
                 # update the step, exp_avg, and exp_avg_sq of the optimizer state
                 print(
@@ -62,6 +63,11 @@ class CustomLossTrainer(Trainer):
                 for state, p in zip(state_dict.values(), trainable_params):  # type: ignore
                     self.optimizer.state[p] = state  # type: ignore
                 self.resume_from_optimizer_checkpoint = None
+
+        if self.state.global_step == 1 and self.optimizer is not None:
+            state = self.optimizer.state[self.optimizer.param_groups[0]["params"][1]]
+            if "exp_avg" in state:
+                print(f"Adam buffer dtype: {state['exp_avg'].dtype}")
 
         labels = inputs.pop("labels").float()
 
@@ -111,7 +117,7 @@ def lm_sft(
     cfg: dict,
     predict_dict: Union[None, Dict, DatasetDict] = None,
     resume_from_checkpoint: Optional[str] = None,
-) -> None:
+) -> Trainer:
     """
     ds_dict: DatasetDict with splits for train, val, test,
         with columns "txt" and "labels"
@@ -159,7 +165,7 @@ def lm_sft(
         )
         trainer.state.best_model_checkpoint = str(save_dir / "best-ckpt")
         trainer._load_best_model()
-        return
+        return trainer
 
     # store pre hiddens
     if store_pre_hiddens:
@@ -202,3 +208,4 @@ def lm_sft(
         torch.save(hiddens, save_dir / "post_hiddens.pt")
 
     wandb.finish()
+    return trainer
