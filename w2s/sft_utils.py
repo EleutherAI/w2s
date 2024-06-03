@@ -1,6 +1,5 @@
 import gc
 from pathlib import Path
-from enum import StrEnum
 
 import pynvml
 import torch
@@ -11,9 +10,29 @@ from transformers import PretrainedConfig, Trainer
 from w2s.utils import assert_type
 
 
-# simple_parsing doesn't like typing.Literal so I rolled my own
+# simple_parsing doesn't like typing.Literal (pre-3.12) so I rolled my own
 # note: parens, not brackets
-literal = lambda *args: StrEnum("option", args)
+
+# Python 3.11 version:
+# literal = lambda *args: StrEnum("option", args)
+
+# Python 3.10 version:
+def literal(s: str):
+    return type(f'LiteralString_{s}', (LiteralString,), {"value": s})
+
+
+class LiteralString():
+    value = ""
+
+    def __init__(self, value):
+        if value != self.value:
+            raise ValueError(f"Invalid value {value!r} is not literally {self.value!r}")
+
+    def __str__(self):
+        return self.value
+
+    def __eq__(self, other):
+        return self.value == other
 
 
 @torch.no_grad()

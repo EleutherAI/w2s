@@ -9,16 +9,16 @@ from w2s.sft_utils import literal
 
 
 @dataclass
-class SFTConfig(Serializable):  # TODO: what is this for??
+class SFTConfig(Serializable):
     # name of the model to train
-    weak_model_name: str
-    strong_model_name: str
+    weak_model_name: str = "Qwen/Qwen1.5-0.5B"
+    strong_model_name: str = "meta-llama/Meta-Llama-3-8B"
     # name of the dataset to use
-    dataset: str
-    n_epochs: float = 2
-    n_train: int = 20_000
-    n_val: int = 500
-    n_test: int = 1_000
+    dataset: str = "boolq"
+    n_epochs: float = 3
+    n_train: int = 10_000
+    n_val: int = 1_000
+    n_test: int = 5_000
     # when "train", it uses the training set to generate predictions
     # otherwise it uses n_predict held out examples
     n_predict: Union[literal("train"), int] = 0
@@ -33,7 +33,7 @@ class SFTConfig(Serializable):  # TODO: what is this for??
     n_warmup_steps: int = 40  # 2 / (1 - 0.95) = 40
     eval_every: int = 100  # steps
     save_every: int = 100  # steps
-    save_total_limit: Optional[int] = None
+    save_total_limit: Optional[int] = 1
     weight_decay: float = 0.1
     weak_lr: float = 5e-4
     strong_lr: float = 8e-5

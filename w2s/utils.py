@@ -1,5 +1,5 @@
 from typing import Any, Type, TypeVar, cast
-from w2s.sft_config import LossConfig
+from simple_parsing import Serializable
 
 T = TypeVar("T")
 
@@ -48,7 +48,7 @@ def flatten_dict(d: dict, parent_key: str = "", sep: str = "_") -> dict:
         new_key = parent_key + sep + k if parent_key else k
         if isinstance(v, dict):
             items.extend(flatten_dict(v, new_key, sep=sep).items())
-        elif isinstance(v, LossConfig):
+        elif isinstance(v, Serializable):  # can't use LossConfig, etc to avoid circular import
             items.extend(flatten_dict(v.to_dict(), new_key, sep=sep).items())
         else:
             items.append((new_key, v))

@@ -36,12 +36,6 @@ PROBE_CONFIGS = {
     "topo": TopoProbeConfig,
 }
 
-PROBES = {
-    "knn": KnnProbe,
-    "logreg": LogisticProbe,
-    "topo": TopoProbe,
-}
-
 
 class Probe:
     def __init__(self, config: ProbeConfig):
@@ -114,3 +108,10 @@ class TopoProbe(Probe):
             return topofilter(acts, labels, contamination, k_cc=self.k_cc, k_zeta=self.k_zeta)
         else:
             return super().filter(acts, labels, contamination)
+
+
+PROBES = {
+    "knn": KnnProbe,
+    "logreg": LogisticProbe,
+    "topo": TopoProbe,
+}
