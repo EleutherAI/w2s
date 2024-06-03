@@ -9,9 +9,9 @@ import pandas as pd
 import torch
 from datasets import Dataset
 
+from w2s.metrics import acc_ci, roc_auc_ci
 from w2s.model import Predictor
 from w2s.reporter import REPORTER_REGISTRY, Oracle
-from w2s.roc_auc import roc_auc
 
 
 @dataclass
@@ -21,13 +21,6 @@ class ExperimentConfig:
     results_folder: str = "./results"
     run_name: str = "default"
     input_col: str = "txt"
-
-
-def roc_nan(y_true, y_score):
-    try:
-        return roc_auc(y_true, y_score)
-    except ValueError:
-        return np.nan
 
 
 def train_and_eval_reporter(
@@ -89,26 +82,33 @@ def train_and_eval_reporter(
             warnings.warn(
                 "Ground truth labels are not binary, so we're thresholding them."
             )
-        auc = roc_nan(gt_labels > 0.5, cal_logodds)
-        acc = ((cal_logodds > 0) == (gt_labels > 0.5)).mean()
+        auc_result = roc_auc_ci(gt_labels > 0.5, cal_logodds)
+        acc_result = acc_ci((cal_logodds > 0), (gt_labels > 0.5))
 
         if "soft_pred" in test_ds.column_names:
             weak_test_labels = np.array(test_ds["soft_pred"])[:, 1]
+            weak_auc_result = roc_auc_ci(weak_test_labels > 0.5, cal_logodds)
+            weak_acc_result = acc_ci((cal_logodds > 0), (weak_test_labels > 0.5))
+
             weak_results = {
-                "auroc_against_weak": float(
-                    roc_nan(weak_test_labels > 0.5, cal_logodds)
-                ),
-                "acc_against_weak": float(
-                    ((cal_logodds > 0) == (weak_test_labels > 0.5)).mean()
-                ),
+                "auroc_against_weak": float(weak_auc_result.estimate),
+                "auroc_against_weak_lo": float(weak_auc_result.lower),
+                "auroc_against_weak_hi": float(weak_auc_result.upper),
+                "acc_against_weak": float(weak_acc_result.estimate),
+                "acc_against_weak_lo": float(weak_acc_result.lower),
+                "acc_against_weak_hi": float(weak_acc_result.upper),
                 "weak_soft_labels": weak_test_labels.tolist(),
             }
         else:
             weak_results = {}
 
         result = {
-            "auroc": float(auc),
-            "acc": float(acc),
+            "auroc": float(auc_result.estimate),
+            "auroc_lo": float(auc_result.lower),
+            "auroc_hi": float(auc_result.upper),
+            "acc": float(acc_result.estimate),
+            "acc_lo": float(acc_result.lower),
+            "acc_hi": float(acc_result.upper),
             **weak_results,
             "num_weak": len(weak_ds),
             "num_oracle": len(

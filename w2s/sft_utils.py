@@ -7,7 +7,7 @@ from datasets import Dataset
 from tqdm import tqdm
 from transformers import PretrainedConfig, Trainer
 
-from w2s.roc_auc import roc_auc
+from w2s.metrics import roc_auc
 from w2s.utils import assert_type
 
 
