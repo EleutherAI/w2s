@@ -6,12 +6,16 @@ import numpy as np
 import pandas as pd
 import torch
 from datasets import Dataset, DatasetDict
-from transformers import TrainingArguments
-from transformers.integrations.integration_utils import WandbCallback
+from transformers import DataCollatorWithPadding, Trainer, TrainingArguments
 
 from w2s.model import Predictor, TransformerPredictor
 from w2s.sft import lm_sft, prepare_for_trainer
-from w2s.utils import assert_type, ds_with_labels, split_args_by_prefix
+from w2s.utils import (
+    assert_type,
+    ds_with_labels,
+    split_args_by_prefix,
+    uncertainty_sample,
+)
 
 
 class Oracle:
@@ -154,11 +158,8 @@ class SftReporter(Reporter):
         )
 
         if max_queries > 0:
-            # then train on oracle (by default just random subset of oracle)
-            random_oracle_ids = random.sample(
-                self.oracle.get_inputs().index.values.tolist(), max_queries
-            )
-            oracle_ds = Dataset.from_pandas(self.oracle.query_ids(random_oracle_ids))
+            # then train on oracle
+            oracle_ds = self.get_oracle_ds(max_queries)
 
             print(
                 f"\n\033[32m===== {len(oracle_ds)} oracle queries finetuning =====\033[0m"
@@ -169,8 +170,8 @@ class SftReporter(Reporter):
             ota = self.oracle_train_args.copy()
             ota["run_name"] += f"_{max_queries}queries"
             ota["output_dir"] = f"{ota['output_dir']}_{max_queries}queries"
-            max_use_test = 200
-            ota["eval_strategy"] = "no" if max_queries < max_use_test else "steps"
+            min_use_test = 200
+            ota["eval_strategy"] = "no" if max_queries < min_use_test else "steps"
             ota["num_train_epochs"] = {
                 1: 32,
                 2: 32,
@@ -186,7 +187,7 @@ class SftReporter(Reporter):
                 2048: 1,
                 4096: 1,
             }[max_queries]
-            if max_queries < max_use_test:
+            if max_queries < min_use_test:
                 oracle_dict = DatasetDict(train=oracle_ds)
             else:
                 oracle_dict = DatasetDict(
@@ -205,6 +206,12 @@ class SftReporter(Reporter):
             )
 
         return self
+
+    def get_oracle_ds(self, max_queries: int) -> Dataset:
+        random_oracle_ids = random.sample(
+            self.oracle.get_inputs().index.values.tolist(), max_queries
+        )
+        return Dataset.from_pandas(self.oracle.query_ids(random_oracle_ids))
 
     def to_dict(self) -> dict:
         return {
@@ -223,90 +230,42 @@ class SftReporter(Reporter):
             Dataset.from_dict({self.input_col: inputs}), self.strong_model.tokenizer
         )
         # turn off wandb logging in trainer
-        self.w2s_trainer.callback_handler.remove_callback(WandbCallback)
-        pred_logits = torch.from_numpy(self.w2s_trainer.predict(predict_ds).predictions)  # type: ignore # noqa
+        # self.w2s_trainer.callback_handler.remove_callback(WandbCallback)
+        targs = self.weak_train_args.copy()
+        targs["report_to"] = "none"
+        targs["output_dir"] = "tmp"
+        targs["run_name"] = "tmp"
+        trainer = Trainer(
+            args=TrainingArguments(**targs),
+            data_collator=DataCollatorWithPadding(
+                self.strong_model.tokenizer, max_length=1024, padding="max_length"
+            ),  # NOTE: this could mess up some datasets
+            model=self.strong_model.transformer,
+            tokenizer=self.strong_model.tokenizer,
+        )
+        pred_logits = torch.from_numpy(trainer.predict(predict_ds).predictions)  # type: ignore # noqa
         return pred_logits.diff(dim=-1).squeeze()
 
 
 class ActiveSftReporter(SftReporter):
     strong_model: TransformerPredictor  # override type
 
-    def fit(self, max_queries: int) -> "ActiveSftReporter":
-        weak_ds_dict = DatasetDict(
-            train=ds_with_labels(self.weak_ds, labels_column="soft_pred"),
-            test=self.test_ds,
+    def get_oracle_ds(self, max_queries: int) -> Dataset:
+        # get reporter predictions on all data, and pick the `max_queries` most uncertain
+        all_oracle_inputs = Dataset.from_pandas(self.oracle.get_inputs())
+
+        print("Selecting examples with highest entropy for training.")
+
+        pred_logodds = self(all_oracle_inputs["txt"])
+        probs = torch.nn.functional.sigmoid(pred_logodds)
+        probs = torch.stack([1 - probs, probs], dim=-1)
+
+        uncertain_idxs = uncertainty_sample(
+            probs, max_queries, "sample", most_confident=False
         )
-        self.w2s_trainer = lm_sft(
-            ds_dict=weak_ds_dict,
-            model=self.strong_model,
-            train_args=TrainingArguments(**self.weak_train_args),
-            loss="xent",
-            store_pre_hiddens=False,
-            store_post_hiddens=False,
-            cfg=self.to_dict(),
-            predict_dict=None,
-        )
-
-        if max_queries > 0:
-            # then train on oracle
-            all_oracle_inputs = Dataset.from_pandas(self.oracle.get_inputs())
-            print("Selecting examples with highest entropy for training.")
-            # get reporter predictions on all data, and pick the `max_queries` most uncertain
-            tokenized = prepare_for_trainer(
-                all_oracle_inputs, self.strong_model.tokenizer
-            )
-            pred_logits = torch.from_numpy(self.w2s_trainer.predict(tokenized).predictions)  # type: ignore # noqa
-            probs = pred_logits.softmax(-1)
-            entropies = -(probs * probs.log()).sum(dim=-1)
-            uncertain_idxs = entropies.argsort()[:max_queries]
-            oracle_ids = np.array(all_oracle_inputs["id"])[uncertain_idxs].tolist()
-            oracle_ds = Dataset.from_pandas(self.oracle.query_ids(oracle_ids))
-
-            print(
-                f"\n\033[32m===== {len(oracle_ds)} oracle queries finetuning =====\033[0m"
-            )
-            oracle_ds = ds_with_labels(oracle_ds)
-            # add num_queries to the run name and output dir
-            # the previous results will be cached, but these will not
-            ota = self.oracle_train_args.copy()
-            ota["run_name"] += f"_{max_queries}queries"
-            ota["output_dir"] = f"{ota['output_dir']}_{max_queries}queries"
-            max_use_test = 200
-            ota["eval_strategy"] = "no" if max_queries < max_use_test else "steps"
-            ota["num_train_epochs"] = {
-                1: 32,
-                2: 32,
-                4: 32,
-                8: 32,
-                16: 32,
-                32: 32,
-                64: 32,
-                128: 16,
-                256: 8,
-                512: 4,
-                1024: 2,
-                2048: 1,
-                4096: 1,
-            }[max_queries]
-            if max_queries < max_use_test:
-                oracle_dict = DatasetDict(train=oracle_ds)
-            else:
-                oracle_dict = DatasetDict(
-                    train=oracle_ds, test=self.test_ds  # type: ignore
-                )
-            lm_sft(
-                ds_dict=oracle_dict,
-                model=self.strong_model,
-                train_args=TrainingArguments(**ota),
-                loss="xent",
-                store_pre_hiddens=False,
-                store_post_hiddens=False,
-                cfg=self.to_dict(),
-                predict_dict=None,
-                resume_from_checkpoint=f"{self.weak_train_args['output_dir']}/best-ckpt/optimizer.pt",
-            )
-
-        return self
+        oracle_ids = np.array(all_oracle_inputs["id"])[uncertain_idxs].tolist()
+        np.random.shuffle(oracle_ids)
+        return Dataset.from_pandas(self.oracle.query_ids(oracle_ids))
 
 
 class DivDisReporter(Reporter):

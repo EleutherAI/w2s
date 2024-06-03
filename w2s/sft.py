@@ -46,7 +46,6 @@ class CustomLossTrainer(Trainer):
                 assert isinstance(self.optimizer.optimizer, torch.optim.AdamW)
             self.optimizer: torch.optim.AdamW
             state = self.optimizer.state[self.optimizer.param_groups[0]["params"][0]]
-            breakpoint()
             if "exp_avg" not in state:
                 # update the step, exp_avg, and exp_avg_sq of the optimizer state
                 print(
@@ -165,6 +164,7 @@ def lm_sft(
         )
         trainer.state.best_model_checkpoint = str(save_dir / "best-ckpt")
         trainer._load_best_model()
+        wandb.finish()
         return trainer
 
     # store pre hiddens

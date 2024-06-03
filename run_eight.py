@@ -4,17 +4,17 @@ from pathlib import Path
 
 # Define the datasets and respective GPU ids
 configs = [
-    (1, 0, "am_title_0_active3"),
-    (32, 48, "am_title_32x48_active3"),
-    (128, 12, "am_title_128x12_active3"),
-    (512, 4, "am_title_512x4_active3"),
-    (512, 1, "am_title_512_active3"),
-    (2000, 1, "am_title_2000_active3"),
-    (2000, 4, "am_title_2000x4_active3"),
-    (8000, 1, "am_title_8000_active3"),
+    (1, 0, "am_title_0_sft2"),
+    (32, 48, "am_title_32x48_sft2"),
+    # (128, 12, "am_title_128x12_sft2"),
+    (512, 4, "am_title_512x4_sft2"),
+    (512, 1, "am_title_512_sft2"),
+    # (2000, 1, "am_title_2000_sft2"),
+    # (2000, 4, "am_title_2000x4_sft2"),
+    (8000, 1, "am_title_8000_sft2"),
 ]
 
-gpu_ids = [0, 1, 2, 3, 4, 5, 6, 7]
+gpu_ids = [0, 4, 5, 6, 7]
 
 
 base_command = (
@@ -25,7 +25,7 @@ base_command = (
     "{test_ds_path} "
     "{n_train} 8000 3000 "
     "--strong_model_name meta-llama/Meta-Llama-3-8B "
-    "--reporter_method ActiveSftReporter "
+    "--reporter_method SftReporter "
     "--w2s_num_train_epochs {n_epochs} "
     "--oracle_warmup_steps 0 "
     "--eval_steps 50 "

@@ -75,7 +75,7 @@ def init_model_and_tokenizer(cfg: ModelConfig):
 
     if cfg.enable_lora:
         lora_cfg = LoraConfig(
-            target_modules=cfg.lora_modules, task_type=TaskType.SEQ_CLS
+            target_modules=cfg.lora_modules, task_type=TaskType.SEQ_CLS  # type: ignore
         )
 
         # NOTE: adding task_type causes dtype errors, but is necessary for proper module saving

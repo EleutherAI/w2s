@@ -8,7 +8,7 @@ from datasets import Dataset, load_from_disk
 from w2s.model import ModelConfig, TransformerPredictor
 from w2s.reporter_experiment import ExperimentConfig, train_and_eval_reporter
 from w2s.sft_config import set_default_args
-from w2s.utils import assert_type
+from w2s.utils import assert_type, uncertainty_sample
 
 
 def train_reporter_on_transformer(
@@ -49,8 +49,9 @@ def train_reporter_on_transformer(
         print("Selecting examples with highest entropy for training.")
         # select the weak examples with *highest* entropy (easy examples)
         probs = torch.as_tensor(weak_ds["soft_pred"])
-        entropies = -(probs * torch.log(probs)).sum(dim=-1)
-        weak_ds = weak_ds.select((-entropies).argsort()[:n_train])
+        weak_ds = weak_ds.select(
+            uncertainty_sample(probs, n_train, "sample", most_confident=True)
+        )
     else:
         weak_ds = weak_ds.select(range(n_train))
 
