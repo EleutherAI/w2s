@@ -114,6 +114,8 @@ def train(
 
     model, tokenizer = init_model_and_tokenizer(model_cfg)
 
+    print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use after model init")
+
     def process(examples):
         out = tokenizer(examples["txt"], truncation=True)
         return out
@@ -149,7 +151,8 @@ def train(
         probe = PROBES[cfg["probe_name"]](cfg["probe"])
         probe.fit(acts, torch.tensor(ds_dict["train"]["labels"]))
         for name, ds in ds_dict.items():
-            acts = torch.load(acts_dir / f"{name}.pt", map_location=model.device)
+            all_acts = torch.load(acts_dir / f"{name}.pt", map_location=model.device)
+            acts = all_acts[:, cfg["num_hidden_layers"] // 2]
             preds = probe.predict(acts)
             agree_metrics = compute_metrics_torch(preds, torch.tensor(ds["labels"]))
             gt_metrics = compute_metrics_torch(preds, torch.tensor(ds["gt_labels"]))
@@ -177,6 +180,8 @@ def train(
             f"Results already exist at {results_path}. Skipping training and evaluation."
         )
         return
+    else:
+        print(f"No results found at {results_path}. Training model.")
 
     if transfer and cfg["loss_name"] == "window" and cfg["loss"].radius == "midweak":
         confs = torch.abs(torch.tensor(ds_dict["train"]["labels"]) - 0.5)
