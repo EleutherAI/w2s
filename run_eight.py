@@ -1,6 +1,6 @@
 import subprocess
 from multiprocessing import Process
-from sys import argv
+import sys
 
 # Define the datasets and respective GPU ids
 # list of tuples with dataset name and minibatch size
@@ -22,22 +22,8 @@ base_command = (
     "CUDA_VISIBLE_DEVICES={gpu_id} "
     "python run.py "
     "--dataset {dataset} "
-    "--weak_model_name Qwen/Qwen1.5-0.5B "
-    "--strong_model_name meta-llama/Meta-Llama-3-8B "
-    "--n_epochs 3 "
-    "--n_train 10_000 "
-    "--n_val 1000 "
-    "--n_test 5_000 "
-    "--n_predict 0 "
-    "--eval_every 100 "
-    "--save_every 100 "
-    "--save_total_limit 1 "
-    "--loss window "
-    "--radius .3 "
     "--minibatch_size {minibatch_size} "
-    "--weak_lr 5e-4 "
-    "--strong_lr 8e-5 "
-    '--run_name "bigwindow" '
+    "{argv} "
 )
 
 
@@ -46,14 +32,15 @@ def run_command(command):
 
 
 if __name__ == "__main__":
-    # get GPU ID arguments
-    if len(argv) > 1:
-        included_gpu_ids = list(map(int, argv[1:]))
-        assert all(
-            gpu_id in gpu_ids for gpu_id in included_gpu_ids
-        ), f"Invalid GPU IDs: {included_gpu_ids}"
+    if "--gpus" in sys.argv:
+        included_gpu_ids = [int(gpu_id) for gpu_id in argv[argv.index("--gpus") + 1].split(",")]
+        other_argv = sys.argv[1:argv.index("--gpus")] + sys.argv[argv.index("--gpus") + 2:]
+        
     else:
         included_gpu_ids = gpu_ids
+        other_argv = sys.argv[1:]
+
+    argv = " ".join(other_argv)
 
     # List to hold processes
     processes = []
@@ -63,7 +50,10 @@ if __name__ == "__main__":
         if gpu_id not in included_gpu_ids:
             continue
         command = base_command.format(
-            gpu_id=gpu_id, dataset=dataset, minibatch_size=minibatch_size
+            gpu_id=gpu_id, 
+            dataset=dataset, 
+            minibatch_size=minibatch_size,
+            argv=argv,
         )
         print(f"Running command: {command}")  # Debug print
         p = Process(target=run_command, args=(command,))

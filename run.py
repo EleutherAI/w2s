@@ -140,6 +140,7 @@ def run_train(cfg: SFTConfig):
         transfer=True,
         predict_dict=w2s_predict_dict,
         save_activations=True,
+        acts_dir=shared_root / cfg_name / "w2s" / "activations",
     )
 
     prev = "w2s"
@@ -183,6 +184,7 @@ def run_train(cfg: SFTConfig):
             cfg.to_dict(),
             transfer=True,
             predict_dict=s2s_predict_dict,
+            acts_dir=root / cfg_name / f"s2s-{s2s_iter}" / "activations",
         )
 
         prev = f"s2s-{s2s_iter}"

@@ -15,7 +15,7 @@ class LossConfig(Serializable):
 @dataclass
 class LogConfidenceLossConfig(LossConfig):
     logconf_weight: float = 0.5
-    logconf_warmup_steps: int = 200
+    logconf_warmup_steps: int = 100
     balance_batch: bool = False
 
 @dataclass

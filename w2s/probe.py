@@ -21,7 +21,7 @@ class KnnProbeConfig(ProbeConfig):
 
 @dataclass
 class LogisticProbeConfig(ProbeConfig):
-    l2p: float = 0.01
+    l2p: float = 1e-3
 
 @dataclass
 class TopoProbeConfig(ProbeConfig):

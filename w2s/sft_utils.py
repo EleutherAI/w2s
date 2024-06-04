@@ -17,9 +17,16 @@ from w2s.utils import assert_type
 # literal = lambda *args: StrEnum("option", args)
 
 # Python 3.10 version:
-def literal(s: str):
-    return type(f'LiteralString_{s}', (LiteralString,), {"value": s})
+def ident_escape_char(c: str) -> str:
+    if c.isalnum() or c == "_":
+        return c
+    return f"_{ord(c)}_"
 
+def ident_escape(s: str) -> str:
+    return "".join(ident_escape_char(c) for c in s)
+
+def literal(s: str):
+    return type('LiteralString_' + ident_escape(s), (LiteralString,), {"value": s})
 
 class LiteralString():
     value = ""

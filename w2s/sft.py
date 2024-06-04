@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Union
+from typing import Union, Optional
 
 import torch
 from datasets import DatasetDict
@@ -89,6 +89,7 @@ def train(
     predict_dict: Union[DatasetDict, dict, None] = None,
     save_activations: bool = False,
     use_probe: bool = False,
+    acts_dir: Optional[Path] = None,
 ):
     """
     ds_dict: DatasetDict with splits for train, val, test, and (optionally) predict,
@@ -107,7 +108,6 @@ def train(
     """
     save_dir = Path(train_args.output_dir)
     results_path = save_dir / "results.json"
-    acts_dir = save_dir / "activations"
 
     clear_mem()
     print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use before training")
@@ -131,7 +131,9 @@ def train(
         predictions, labels = map(torch.from_numpy, eval_pred)
         return compute_metrics_torch(predictions, labels)
 
-    if save_activations:
+    probe_required = transfer and (cfg.probe_relabel or cfg.probe_filter)
+
+    if save_activations or probe_required:
         if acts_dir.exists():
             print("Activations already exist at", acts_dir)
         else:
@@ -141,7 +143,7 @@ def train(
                 acts = gather_hiddens(model, ds)
                 torch.save(acts, acts_dir / f"{name}.pt")
 
-    if transfer and (cfg.probe_relabel or cfg.probe_filter):
+    if probe_required:
         print("Training probe")
         acts = torch.load(acts_dir / f"train.pt", map_location=model.device)
         probe = PROBES[cfg["probe_name"]](cfg["probe"])
@@ -151,7 +153,7 @@ def train(
             preds = probe.predict(acts)
             agree_metrics = compute_metrics_torch(preds, torch.tensor(ds["labels"]))
             gt_metrics = compute_metrics_torch(preds, torch.tensor(ds["gt_labels"]))
-            with open(acts_dir / f"{name}_probe_metrics.json", "w") as f:
+            with open(save_dir / f"{name}_probe_metrics.json", "w") as f:
                 json.dump({"agree": agree_metrics, "gt": gt_metrics}, f, indent=2)
             if name in ["train", "val"]:
                 if cfg.probe_filter:
@@ -162,7 +164,7 @@ def train(
                         "removed": len(ds) - len(good_indices),
                         "contamination": int(cfg.contamination * len(ds)),
                     }
-                    with open(acts_dir / f"{name}_filter_sizes.json", "w") as f:
+                    with open(save_dir / f"{name}_filter_sizes.json", "w") as f:
                         json.dump(sizes, f, indent=2)
                     ds = ds.select(good_indices)
                     ds_dict[name] = ds
@@ -211,6 +213,7 @@ def train(
         cfg["train_args"] = train_args.to_dict()
         cfg["transfer"] = transfer
         cfg["loss"] = cfg["loss"].to_dict()
+        cfg["probe"] = cfg["probe"].to_dict()
         json.dump(cfg, f, indent=2)
     wandb.config.update(cfg)
 
