@@ -85,12 +85,16 @@ class CustomLossTrainer(Trainer):
         return (loss, outputs) if return_outputs else loss
 
 
-def prepare_for_trainer(ds: Union[DatasetDict, Dataset], tokenizer):
+def prepare_for_trainer(
+    ds: Union[DatasetDict, Dataset], tokenizer, discard_other_cols=True
+):
     keep_cols = {"labels", "input_ids", "attention_mask"}
 
     def preprocess(exs):
         out = tokenizer(exs["txt"], truncation=True)
-        return {k: v for k, v in out.items() if k in keep_cols}
+        if discard_other_cols:
+            return {k: v for k, v in out.items() if k in keep_cols}
+        return out
 
     ds.reset_format()
     columns_names = (
@@ -194,7 +198,12 @@ def lm_sft(
     # save predictions
     if predict_dict is not None:
         for name, predict_ds in predict_dict.items():
-            predict_ds = prepare_for_trainer(predict_ds, model.tokenizer)
+            if (save_dir / "predictions" / name).exists():
+                print(f"Predictions for {name} already exist. Skipping.")
+                continue
+            predict_ds = prepare_for_trainer(
+                predict_ds, model.tokenizer, discard_other_cols=False
+            )
             print("Gathering predictions for", name)
             pred_logits = torch.from_numpy(trainer.predict(predict_ds).predictions)  # type: ignore
             preds = pred_logits.softmax(-1).tolist()

@@ -71,9 +71,14 @@ def ds_with_labels(ds: Dataset, labels_column: str = "soft_label"):
 
 
 def uncertainty_sample(
-    probs, n, method: Literal["sample", "hard"], most_confident=False
+    probs,
+    n,
+    method: Literal["sample", "hard"],
+    most_confident=False,
+    eps=1e-8,
 ):
     assert probs.ndim == 2
+    probs = torch.clamp(probs, eps, 1 - eps)
     entropies = -(probs * torch.log2(probs)).sum(dim=-1)
     if method == "hard":
         idxs = (1 - entropies if most_confident else entropies).argsort()[:n][

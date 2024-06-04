@@ -1,21 +1,19 @@
 import subprocess
 from multiprocessing import Process
-from pathlib import Path
 
 # Define the datasets and respective GPU ids
 configs = [
-    (1, 0, "am_title_0_sft2"),
-    (32, 48, "am_title_32x48_sft2"),
-    # (128, 12, "am_title_128x12_sft2"),
-    (512, 4, "am_title_512x4_sft2"),
-    (512, 1, "am_title_512_sft2"),
-    # (2000, 1, "am_title_2000_sft2"),
-    # (2000, 4, "am_title_2000x4_sft2"),
-    (8000, 1, "am_title_8000_sft2"),
+    (1, 0),
+    (32, 48),
+    (128, 12),
+    (512, 4),
+    (512, 1),
+    # (2000, 1),
+    # (2000, 4),
+    (8000, 1),
 ]
-
-gpu_ids = [0, 4, 5, 6, 7]
-
+gpu_ids = [0, 1, 2, 4, 5, 7]
+weak_labels_dir = "amazon_polarity_title_only_denoised"
 
 base_command = (
     "CUDA_VISIBLE_DEVICES={gpu_id} "
@@ -23,9 +21,9 @@ base_command = (
     "{weak_ds_path} "
     "{oracle_ds_path} "
     "{test_ds_path} "
-    "{n_train} 8000 3000 "
+    "{n_train} 8000 2686 "
     "--strong_model_name meta-llama/Meta-Llama-3-8B "
-    "--reporter_method SftReporter "
+    "--reporter_method ActiveSftReporter "
     "--w2s_num_train_epochs {n_epochs} "
     "--oracle_warmup_steps 0 "
     "--eval_steps 50 "
@@ -34,8 +32,8 @@ base_command = (
     "--per_device_train_batch_size 1 "
     "--per_device_eval_batch_size 16 "
     "--gradient_accumulation_steps 32 "
-    "--results_folder /mnt/ssd-1/alexm/w2s/results/amazon_polarity_title_only "
-    '--run_name "{run_name}" '
+    f"--results_folder /mnt/ssd-1/alexm/w2s/results/{weak_labels_dir} "
+    '--run_name "am_title_denoised_{n_train}x{n_epochs}_active" '
 )
 
 
@@ -43,32 +41,17 @@ def run_command(command):
     subprocess.run(command, shell=True, check=True)
 
 
-floor_command = (
-    "CUDA_VISIBLE_DEVICES=0 "
-    "python run_simple_sft.py "
-    "amazon_polarity_misleading "
-    "--per_device_train_batch_size 4 "
-    "--gradient_accumulation_steps 8 "
-)
-
-weak_ds_path = "/mnt/ssd-1/alexm/w2s/results/amazon_polarity_title_only/weak_train"
-oracle_ds_path = "/mnt/ssd-1/alexm/w2s/results/amazon_polarity_title_only/weak_train"
-test_ds_path = "/mnt/ssd-1/alexm/w2s/results/amazon_polarity_title_only/weak_test"
-
-if Path(weak_ds_path).is_dir():
-    print("Weak dataset exists, skipping floor model training")
-else:
-    print("Training weak floor model")
-    run_command(floor_command)
+weak_ds_path = f"/mnt/ssd-1/alexm/w2s/results/{weak_labels_dir}/weak_train"
+oracle_ds_path = f"/mnt/ssd-1/alexm/w2s/results/{weak_labels_dir}/weak_train"
+test_ds_path = f"/mnt/ssd-1/alexm/w2s/results/{weak_labels_dir}/weak_test"
 
 processes = []
 
 # Loop over datasets and gpu_ids
-for gpu_id, (n_train, n_epochs, run_name) in zip(gpu_ids, configs):
+for gpu_id, (n_train, n_epochs) in zip(gpu_ids, configs):
     command = base_command.format(
         gpu_id=gpu_id,
         n_train=n_train,
-        run_name=run_name,
         n_epochs=n_epochs,
         weak_ds_path=weak_ds_path,
         oracle_ds_path=oracle_ds_path,

@@ -1,7 +1,9 @@
+import random
 from pathlib import Path
 from typing import Optional
 
 import fire
+import numpy as np
 import torch
 from datasets import Dataset, load_from_disk
 
@@ -26,8 +28,14 @@ def train_reporter_on_transformer(
     results_folder: Optional[str] = None,
     run_name: str = "default",
     input_col: str = "txt",
+    seed: int = 42,
     **reporter_args,
 ):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
     reporter_args = set_default_args(
         reporter_args, model_name=strong_model_name, run_name=run_name
     )
