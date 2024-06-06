@@ -97,7 +97,7 @@ def prepare_for_trainer(
         return out
 
     ds.reset_format()
-    columns_names = (
+    columns_names = set(
         ds.column_names
         if isinstance(ds, Dataset)
         else next(iter(ds.values())).column_names
@@ -105,7 +105,7 @@ def prepare_for_trainer(
     ds = ds.map(
         preprocess,
         batched=True,
-        remove_columns=list(set(columns_names) - keep_cols),
+        remove_columns=list(columns_names - keep_cols) if discard_other_cols else None,
     )
     return ds
 
