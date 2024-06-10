@@ -64,7 +64,7 @@ def main(
         )  # noqa
         denoise_args["per_device_train_batch_size"] = remove_mislabeled_minibatch_size
         denoise_args["per_device_eval_batch_size"] = (
-            remove_mislabeled_minibatch_size * 4
+            remove_mislabeled_minibatch_size * 2
         )
 
         # apply a good template

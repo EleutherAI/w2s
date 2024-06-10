@@ -269,12 +269,14 @@ register_dataset(
 )
 
 
-def format_ethics_deontology(ex, rng):
-    "yes" if ex["label"] else "no"
-    txt = (
-        "Q: Is the following a morally valid"
-        f" excuse?\n\n{ex['scenario']}\n\n{ex['excuse']}\n\nA:"
-    )
+def format_ethics_deontology(ex, rng, excuse_only=False):
+    if excuse_only:
+        txt = f"Q: Is \"{ex['excuse']}\" a morally valid excuse?\n\nA:"
+    else:
+        txt = (
+            "Q: Is the following a morally valid"
+            f" excuse?\n\n{ex['scenario']}\n\n{ex['excuse']}\n\nA:"
+        )
     return dict(txt=txt, hard_label=ex["label"])
 
 
@@ -283,6 +285,14 @@ register_dataset(
     DatasetConfig(
         loader=hf_loader("hendrycks/ethics", "deontology"),  # type: ignore
         formatter=format_ethics_deontology,  # type: ignore
+    ),
+)
+
+register_dataset(
+    "ethics_deontology_excuse_only",
+    DatasetConfig(
+        loader=hf_loader("hendrycks/ethics", "deontology"),  # type: ignore
+        formatter=functools.partial(format_ethics_deontology, excuse_only=True),  # type: ignore
     ),
 )
 

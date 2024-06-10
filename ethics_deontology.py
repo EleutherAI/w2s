@@ -40,12 +40,12 @@ def main(
 
     if results_folder is None:
         results_folder = str(
-            Path(__file__).parent / "results/amazon_polarity_title_only"
+            Path(__file__).parent / "results/ethics_deontology_excuse_only"
         )
 
     # load dataset
     source_ds = load_and_process_dataset(
-        "amazon_polarity_title_only", n_train, n_val, n_test, n_predict
+        "ethics_deontology_excuse_only", n_train, n_val, n_test, n_predict
     )
 
     if remove_mislabeled_model:
@@ -64,13 +64,13 @@ def main(
         )  # noqa
         denoise_args["per_device_train_batch_size"] = remove_mislabeled_minibatch_size
         denoise_args["per_device_eval_batch_size"] = (
-            remove_mislabeled_minibatch_size * 4
+            remove_mislabeled_minibatch_size * 2
         )
 
         # apply a good template
         def good_template(ex):
             return {
-                "txt": f"Is the following review positive or negative?\n\n{ex['title']}\n\n{ex['content']}\n\nIs it positive or negative?"  # noqa
+                "txt": f"Scenario: {ex['scenario']}\n\nIn this scenario, is \"{ex['excuse']}\" a morally valid excuse?"  # noqa
             }
 
         denoise_ds = source_ds.map(good_template)
@@ -145,7 +145,7 @@ def main(
     test_ds = load_from_disk(str(predict_dir / "test"))
 
     def reformat(ex):
-        txt = f"{ex['content']}\n\nAbove is a review titled \"{ex['title']}\". Based only on the title, would you expect that the reviewer liked the product?"  # noqa
+        txt = f"...{ex['scenario']}:\n\nA: True\n\nQ2: Is \"{ex['excuse']}\" usually a morally acceptable excuse?\n\nA:"  # noqa
         id = hashlib.sha1(txt.encode()).hexdigest()[:8]
         return {"txt": txt, "id": id}
 
