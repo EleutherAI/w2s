@@ -48,7 +48,7 @@ def gather_hiddens(model: torch.nn.Module, dataset: Dataset):
 
     cfg = assert_type(PretrainedConfig, model.config)
     D = assert_type(int, cfg.hidden_size)
-    L = assert_type(int, cfg.num_hidden_layers)
+    L = assert_type(int, cfg.num_hidden_layers + 1)
 
     buffer = torch.empty(len(dataset), L, D, device=model.device, dtype=model.dtype)
     print(f"Allocated buffer of shape {buffer.shape}")
@@ -122,3 +122,31 @@ def get_gpu_mem_used() -> float:
     finally:
         pynvml.nvmlShutdown()
     return prop_sum / num_devices
+
+
+def spotcheck_init(model: torch.nn.Module):
+    spots = {}
+    for name, param in model.named_parameters():
+        p = param.detach().clone()
+        depth = param.dim()
+        for _ in range(depth - 1):
+            p = p[0]
+        spots[name] = p
+
+    return spots
+
+
+def spotcheck(model: torch.nn.Module, spots):
+    for name, param in model.named_parameters():
+        p = param.detach().clone()
+        depth = param.dim()
+        for _ in range(depth - 1):
+            p = p[0]
+        if torch.allclose(p, spots[name], rtol=1e-2) or not param.requires_grad:
+            print(f"[WARNING] Param {name} possibly unchanged.")
+            print(f"change: {torch.norm(p - spots[name]) / torch.norm(p):.4e}, grad: {param.requires_grad}")
+
+def lshape(l):
+    if not isinstance(l, list):
+        return []
+    return [len(l)] + lshape(l[0])

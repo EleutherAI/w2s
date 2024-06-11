@@ -55,19 +55,24 @@ class AutoCastingScore(torch.nn.Module):
         ).to(self.output_dtype)
 
 
-def init_model_and_tokenizer(cfg: ModelConfig):
+def init_tokenizer(cfg: ModelConfig) -> AutoTokenizer:
+    tokenizer = AutoTokenizer.from_pretrained(cfg.name)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    return tokenizer
+
+
+def init_model(tokenizer, cfg: ModelConfig):
     model = AutoModelForSequenceClassification.from_pretrained(
-        cfg.name, torch_dtype="auto", device_map={"": "cuda"}
+        cfg.name, torch_dtype="auto", device_map={"": "cuda"},
+        # force_download=True,
     )
 
     if cfg.lora_modules is None and cfg.enable_lora:
         cfg.lora_modules = MODEL_REGISTRY.get(cfg.name, {}).get(
             "lora_modules", DEFAULT_LORA_MODULES
         )
-
-    tokenizer = AutoTokenizer.from_pretrained(cfg.name)
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token = tokenizer.eos_token
 
     model.config.pad_token_id = tokenizer.pad_token_id  # type: ignore
     model.score.weight.data *= 0.01
@@ -96,6 +101,13 @@ def init_model_and_tokenizer(cfg: ModelConfig):
     for p in model.parameters():
         if p.requires_grad:
             p.data = p.data.float()
+
+    return model
+
+
+def init_model_and_tokenizer(cfg: ModelConfig):
+    tokenizer = init_tokenizer(cfg)
+    model = init_model(tokenizer, cfg)
 
     return model, tokenizer
 

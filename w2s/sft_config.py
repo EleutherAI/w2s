@@ -43,6 +43,7 @@ class SFTConfig(Serializable):
     loss: LossConfig = subgroups(LOSS_CONFIGS, default="logconf")
     probe: ProbeConfig = subgroups(PROBE_CONFIGS, default="knn")
 
+    probe_layer: Optional[int] = None
     probe_relabel: bool = False
     probe_filter: bool = False
     contamination: float = 0.1

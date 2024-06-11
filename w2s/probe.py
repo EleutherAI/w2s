@@ -17,7 +17,7 @@ class ProbeConfig(Serializable):
 
 @dataclass
 class KnnProbeConfig(ProbeConfig):
-    k: int = 20
+    k: int = 50
 
 @dataclass
 class LogisticProbeConfig(ProbeConfig):
@@ -25,8 +25,8 @@ class LogisticProbeConfig(ProbeConfig):
 
 @dataclass
 class TopoProbeConfig(ProbeConfig):
-    k_cc: int = 20
-    k_zeta: int = 20
+    k_cc: int = 100
+    k_zeta: int = 50
     modified: bool = False
 
 
@@ -81,10 +81,12 @@ class LogisticProbe(Probe):
         self.l2p = config.l2p
 
     def fit(self, acts, labels):
+        acts = acts.to(torch.float32)
         self.clf = Classifier(acts.shape[1], num_classes=1, device=acts.device)
         self.clf.fit(acts, labels, l2_penalty=self.l2p)
 
     def predict(self, acts):
+        acts = acts.to(torch.float32)
         preds = torch.sigmoid(self.clf(acts))
         return preds
 

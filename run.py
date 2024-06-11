@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 import torch
 from datasets import DatasetDict, load_from_disk
@@ -15,6 +16,7 @@ from w2s.utils import get_config_foldername
 
 
 def run_train(cfg: SFTConfig):
+    print(f"Loading and processing dataset {cfg.dataset}")
     splits = load_and_process_dataset(
         cfg.dataset, cfg.n_train, cfg.n_val, cfg.n_test, cfg.n_predict
     )
@@ -105,6 +107,7 @@ def run_train(cfg: SFTConfig):
 
     # load weak predictions
     weak_preds_root = shared_root / cfg_name / "weak" / "predictions"
+    print(f"Loading weak predictions from {weak_preds_root}")
     weak_train_preds_ds = load_from_disk(str(weak_preds_root / "train"))
     weak_val_preds_ds = load_from_disk(str(weak_preds_root / "val"))
 
@@ -150,6 +153,7 @@ def run_train(cfg: SFTConfig):
 
         # load prev predictions
         prev_preds_root = root / cfg_name / prev / "predictions"
+        print(f"Loading {prev} predictions from {prev_preds_root}")
         prev_train_preds_ds = load_from_disk(str(prev_preds_root / "train"))
         prev_val_preds_ds = load_from_disk(str(prev_preds_root / "val"))
 
@@ -190,4 +194,5 @@ def run_train(cfg: SFTConfig):
         prev = f"s2s-{s2s_iter}"
 
 if __name__ == "__main__":
+    os.environ["HF_DATASETS_CACHE"] = "/home/adam/hf_cache"
     run_train(parse(SFTConfig))

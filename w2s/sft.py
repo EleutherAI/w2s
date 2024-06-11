@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from typing import Union, Optional
+import os
 
 import torch
 from datasets import DatasetDict
@@ -11,14 +12,22 @@ from transformers import (
 )
 
 import wandb
-from w2s.loss import log_confidence_loss, confidence_window_loss, cross_entropy_loss
-from w2s.model import ModelConfig, init_model_and_tokenizer
+from w2s.loss import (
+    log_confidence_loss, 
+    confidence_window_loss, 
+    cross_entropy_loss,
+    kl_divergence_loss,
+)
+from w2s.model import ModelConfig, init_tokenizer, init_model
 from w2s.roc_auc import roc_auc
 from w2s.sft_utils import (
     clear_mem,
     get_gpu_mem_used,
     move_best_ckpt,
     gather_hiddens,
+    spotcheck_init,
+    spotcheck,
+    lshape,
 )
 from w2s.loss import LossConfig
 from w2s.probe import PROBES
@@ -68,6 +77,11 @@ class CustomLossTrainer(Trainer):
                 outputs.logits,
                 labels,
             )
+        elif self.loss_name == 'kl':
+            loss = kl_divergence_loss(
+                outputs.logits,
+                labels,
+            )
         elif self.loss_name == 'window':
             loss = confidence_window_loss(
                 outputs.logits,
@@ -109,12 +123,13 @@ def train(
     save_dir = Path(train_args.output_dir)
     results_path = save_dir / "results.json"
 
+    os.makedirs(save_dir, exist_ok=True)
+
     clear_mem()
-    print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use before training")
 
-    model, tokenizer = init_model_and_tokenizer(model_cfg)
-
-    print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use after model init")
+    print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use before toker init")
+    tokenizer = init_tokenizer(model_cfg)
+    model = None
 
     def process(examples):
         out = tokenizer(examples["txt"], truncation=True)
@@ -129,6 +144,9 @@ def train(
             auroc=roc_auc(hard_labels, predictions[:, 1]),
         )
 
+    def detorch_metrics(metrics):
+        return {k: v.detach().cpu().item() for k, v in metrics.items()}
+
     def compute_metrics(eval_pred):
         predictions, labels = map(torch.from_numpy, eval_pred)
         return compute_metrics_torch(predictions, labels)
@@ -136,10 +154,14 @@ def train(
     probe_required = transfer and (cfg['probe_relabel'] or cfg['probe_filter'])
 
     if save_activations or probe_required:
-        if acts_dir.exists():
+        if acts_dir.exists() and all((acts_dir / f"{name}.pt").exists() for name in ds_dict.keys()):
             print("Activations already exist at", acts_dir)
         else:
             print("Saving activations to", acts_dir)
+            if model is None:
+                print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use before training")
+                model = init_model(tokenizer, model_cfg)
+                print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use after model init")
             acts_dir.mkdir(parents=True, exist_ok=True)
             for name, ds in ds_dict.items():
                 acts = gather_hiddens(model, ds)
@@ -147,20 +169,36 @@ def train(
 
     if probe_required:
         print("Training probe")
-        acts = torch.load(acts_dir / f"train.pt", map_location=model.device)
+        print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use before first act load")
+        all_acts = torch.load(acts_dir / f"train.pt", map_location="cuda")
+        probe_layer = cfg["probe_layer"] 
+        if probe_layer is None:
+            probe_layer = all_acts.shape[1] // 2
+        print(f"Using probe layer {probe_layer}")
+        acts = all_acts[:, probe_layer]
+        print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use after first act load")
         probe = PROBES[cfg["probe_name"]](cfg["probe"])
-        probe.fit(acts, torch.tensor(ds_dict["train"]["labels"]))
+        probe.fit(acts, torch.tensor(ds_dict["train"]["labels"], device="cuda"))
+        print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use after probe training")
         for name, ds in ds_dict.items():
-            all_acts = torch.load(acts_dir / f"{name}.pt", map_location=model.device)
-            acts = all_acts[:, cfg["num_hidden_layers"] // 2]
+            all_acts = torch.load(acts_dir / f"{name}.pt", map_location="cuda")
+            acts = all_acts[:, probe_layer]
             preds = probe.predict(acts)
-            agree_metrics = compute_metrics_torch(preds, torch.tensor(ds["labels"]))
-            gt_metrics = compute_metrics_torch(preds, torch.tensor(ds["gt_labels"]))
-            with open(save_dir / f"{name}_probe_metrics.json", "w") as f:
-                json.dump({"agree": agree_metrics, "gt": gt_metrics}, f, indent=2)
+            # preds --> (1-preds, preds)
+            preds = torch.stack([1 - preds, preds], dim=-1)
+            print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use after probe prediction on {name}")
+            # print(f"preds shape: {preds.shape}")
+            # print(f"labels shape: {torch.tensor(ds['labels']).shape}")
+            agree_metrics = compute_metrics_torch(preds, torch.tensor(ds["labels"], device="cuda"))
+            gt_metrics = compute_metrics_torch(preds, torch.tensor(ds["gt_labels"], device="cuda"))
+            with open(save_dir / f"{name}_probe_metrics.json", "w", ) as f:
+                json.dump({
+                    "agree": detorch_metrics(agree_metrics), 
+                    "gt": detorch_metrics(gt_metrics),
+                }, f, indent=2)
             if name in ["train", "val"]:
                 if cfg['probe_filter']:
-                    good_indices = probe.filter(acts, torch.tensor(ds["labels"]), cfg['contamination'])
+                    good_indices = probe.filter(acts, torch.tensor(ds["labels"], device="cuda"), cfg['contamination'])
                     sizes = {
                         "before": len(ds),
                         "after": len(good_indices),
@@ -172,7 +210,8 @@ def train(
                     ds = ds.select(good_indices)
                     ds_dict[name] = ds
                 if cfg['probe_relabel']:
-                    ds = ds.remove_columns("labels").add_column("labels", preds.numpy())
+                    # print(lshape(ds["labels"]))
+                    ds = ds.remove_columns("labels").add_column("labels", preds[:, 1].cpu().numpy())
                     ds_dict[name] = ds
 
     if results_path.exists():
@@ -180,8 +219,13 @@ def train(
             f"Results already exist at {results_path}. Skipping training and evaluation."
         )
         return
-    else:
-        print(f"No results found at {results_path}. Training model.")
+    
+    print(f"No results found at {results_path}. Training model.")
+
+    if model is None:
+        print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use before training")
+        model = init_model(tokenizer, model_cfg)
+        print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use after model init")
 
     if transfer and cfg["loss_name"] == "window" and cfg["loss"].radius == "midweak":
         confs = torch.abs(torch.tensor(ds_dict["train"]["labels"]) - 0.5)
@@ -201,8 +245,14 @@ def train(
         train_dataset=ds_dict["train"],
     )
 
+    # spotcheck for untrained params
+    # spots = spotcheck_init(model)
+
     # train
     trainer.train()
+
+    # spotcheck
+    # spotcheck(model, spots)
 
     # evaluate on test dataset
     eval_results = trainer.evaluate(ds_dict["test"])  # type: ignore

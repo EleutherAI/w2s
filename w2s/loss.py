@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from dataclasses import dataclass
 from typing import Optional, Union
 from w2s.sft_utils import literal
@@ -30,11 +31,16 @@ class LogEntropyLossConfig(LogConfidenceLossConfig):
 class CrossEntropyLossConfig(LossConfig):
     pass
 
+@dataclass
+class KLDivergenceLossConfig(LossConfig):
+    pass
+
 LOSS_CONFIGS = {
     "logconf": LogConfidenceLossConfig, 
     "window": ConfidenceWindowLossConfig,
     "entropy": LogEntropyLossConfig,
     "xent": CrossEntropyLossConfig,
+    "kl": KLDivergenceLossConfig,
 }
 
 
@@ -75,6 +81,19 @@ def cross_entropy_loss(
     return torch.nn.functional.cross_entropy(logits, target)
 
 
+def kl_divergence_loss(
+    logits,
+    labels,
+):
+    logits = logits.float()
+    labels = labels.float()
+
+    target = torch.stack([1.0 - labels, labels], dim=1)
+    log_preds = torch.log_softmax(logits, dim=-1)
+
+    return F.kl_div(log_preds, target, reduction="batchmean")
+
+
 def log_confidence_loss(
     logits,
     labels,
@@ -95,7 +114,7 @@ def log_confidence_loss(
         labels = torch.sigmoid(logodds_labels - logodds_labels.mean())
         prior = 0.5
     else:
-        prior = labels.mean()
+        prior = labels.mean() if labels.shape[0] > 1 else 0.5
 
     coef = aux_coef * min(1.0, step / warmup_steps) if warmup_steps > 0 else aux_coef
     preds = torch.softmax(logits, dim=-1)
