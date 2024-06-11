@@ -46,6 +46,10 @@ class CustomLossTrainer(Trainer):
         self.loss_name = loss_name
         self.loss_cfg = loss_cfg
         self.transfer = transfer
+        if loss_name == "logconf":
+            self.buffer = []
+            # self.buffer_size = kwargs["buffer_size"]
+
 
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.pop("labels").float()
@@ -61,6 +65,8 @@ class CustomLossTrainer(Trainer):
                 warmup_steps=self.loss_cfg.logconf_warmup_steps,
                 balance_batch=self.loss_cfg.balance_batch,
                 harden=True,
+                buffer=self.buffer,
+                # buffer_size=self.buffer_size,
             )
         elif self.loss_name == 'entropy':
             loss = log_confidence_loss(

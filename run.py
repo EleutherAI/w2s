@@ -21,13 +21,17 @@ def run_train(cfg: SFTConfig):
         cfg.dataset, cfg.n_train, cfg.n_val, cfg.n_test, cfg.n_predict
     )
 
+    train_halves = splits["train"].train_test_split(test_size=0.5, seed=seed)
+    splits["weak_train"] = train_halves["train"]
+    splits["strong_train"] = train_halves["test"]
+
     cols = ["hard_label", "txt"]
     splits = splits.select_columns(cols).rename_column("hard_label", "labels")
     for split in splits:
         splits[split] = splits[split].add_column("gt_labels", splits[split]["labels"])
 
     print(
-        f"Example:\n\n{splits['train'][0]['txt']}\n\nLabel: {splits['train'][0]['labels']}"
+        f"Example:\n\n{splits['strong_train'][0]['txt']}\n\nLabel: {splits['strong_train'][0]['labels']}"
     )
 
     root = Path(cfg.results_folder) / cfg.run_name
@@ -69,12 +73,12 @@ def run_train(cfg: SFTConfig):
     train_args["learning_rate"] = cfg.weak_lr
     weak_ds_dict = DatasetDict(
         {
-            "train": splits["train"],
+            "train": splits["weak_train"],
             "val": splits["val"],
             "test": splits["test"],
         }
     )
-    weak_predict_dict = {"train": splits["train"], "val": splits["val"]}
+    weak_predict_dict = {"train": splits["strong_train"], "val": splits["val"]}
     train(
         weak_ds_dict,
         model_cfg,
@@ -92,7 +96,7 @@ def run_train(cfg: SFTConfig):
     train_args["learning_rate"] = cfg.strong_lr
     strong_ds_dict = DatasetDict(
         {
-            "train": splits["train"],
+            "train": splits["strong_train"],
             "val": splits["val"],
             "test": splits["test"],
         }
@@ -120,7 +124,7 @@ def run_train(cfg: SFTConfig):
     w2s_ds_dict = DatasetDict(
         {
             "train": (
-                splits["train"]
+                splits["strong_train"]
                 .remove_columns("labels")
                 .add_column("labels", weak_train_preds_ds["soft_pred"])  # type: ignore
             ),
@@ -134,7 +138,7 @@ def run_train(cfg: SFTConfig):
     )
     # assert (weak_train_preds_ds["id"] == w2s_ds_dict["train"]["id"])
     # assert (weak_val_preds_ds["id"] == w2s_ds_dict["val"]["id"])
-    w2s_predict_dict = {"train": splits["train"], "val": splits["val"]}
+    w2s_predict_dict = {"train": splits["strong_train"], "val": splits["val"]}
     train(
         w2s_ds_dict,
         model_cfg,
@@ -166,7 +170,7 @@ def run_train(cfg: SFTConfig):
         s2s_ds_dict = DatasetDict(
             {
                 "train": (
-                    splits["train"]
+                    splits["strong_train"]
                     .remove_columns("labels")
                     .add_column("labels", prev_train_preds_ds["soft_pred"])  # type: ignore
                 ),
@@ -180,7 +184,7 @@ def run_train(cfg: SFTConfig):
         )
         # assert (prev_train_preds_ds["id"] == s2s_ds_dict["train"]["id"])
         # assert (prev_val_preds_ds["id"] == s2s_ds_dict["val"]["id"])
-        s2s_predict_dict = {"train": splits["train"], "val": splits["val"]}
+        s2s_predict_dict = {"strong_train": splits["train"], "val": splits["val"]}
         train(
             s2s_ds_dict,
             model_cfg,

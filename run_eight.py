@@ -5,7 +5,7 @@ import sys
 # Define the datasets and respective GPU ids
 # list of tuples with dataset name and minibatch size
 configs = [
-    ("boolq", 2),
+    ("boolq", 1),
     ("anli-r2", 8),
     ("cosmos_qa", 4),
     ("mc_taco", 4),
@@ -33,8 +33,9 @@ def run_command(command):
 
 if __name__ == "__main__":
     if "--gpus" in sys.argv:
-        included_gpu_ids = [int(gpu_id) for gpu_id in argv[argv.index("--gpus") + 1].split(",")]
-        other_argv = sys.argv[1:argv.index("--gpus")] + sys.argv[argv.index("--gpus") + 2:]
+        i = sys.argv.index("--gpus")
+        included_gpu_ids = [int(gpu_id) for gpu_id in sys.argv[i + 1].split(",")]
+        other_argv = sys.argv[1:i] + sys.argv[i + 2:]
         
     else:
         included_gpu_ids = gpu_ids
@@ -55,6 +56,8 @@ if __name__ == "__main__":
             minibatch_size=minibatch_size,
             argv=argv,
         )
+        squished = command.replace(" ", "_").replace("/", "_").replace("=", "_")
+        command += f" | tee logs/{squished}.log"
         print(f"Running command: {command}")  # Debug print
         p = Process(target=run_command, args=(command,))
         p.start()

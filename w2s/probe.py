@@ -25,7 +25,7 @@ class LogisticProbeConfig(ProbeConfig):
 
 @dataclass
 class TopoProbeConfig(ProbeConfig):
-    k_cc: int = 100
+    k_cc: int = 50
     k_zeta: int = 50
     modified: bool = False
 

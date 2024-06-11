@@ -1,12 +1,21 @@
 from multiprocessing import Manager, Process
 import subprocess
+from datetime import datetime
 
 # Function that runs the job on a GPU
 def run_on_gpu(gpu: int, job: str):
     print(f"Starting on GPU {gpu}: {job}")
+    print("at time:", datetime.now())
     command = f"CUDA_VISIBLE_DEVICES={gpu} {job}"
-    subprocess.run(command, shell=True, check=True)
-    print(f"Finished on GPU {gpu}: {job}")
+    try:
+        subprocess.run(command, shell=True, check=True)
+    except Exception as e:
+        print(f"[WARN] Error on GPU {gpu}: {job}")
+        print(e)
+    else:
+        print(f"Finished on GPU {gpu}: {job}")
+    finally:
+        print("at time:", datetime.now())
 
 # Worker function that gets jobs and runs them on a specific GPU
 def worker(gpu, jobs, lock):
