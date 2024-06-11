@@ -3,10 +3,16 @@ from dataclasses import dataclass
 from typing import List, Optional, Union
 
 import torch
-from peft import LoraConfig, TaskType, get_peft_model
+from peft import (
+    LoraConfig,
+    TaskType,
+    get_peft_model,
+    prepare_model_for_kbit_training,
+)
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
+    BitsAndBytesConfig,
 )
 
 from w2s.utils import assert_type
@@ -34,10 +40,16 @@ class PredictorConfig(ABC):
 class ModelConfig(PredictorConfig):
     name: str
     enable_lora: bool
+    model_class: type
     lora_modules: Optional[List[str]] = None
 
     def to_dict(self):
-        return vars(self)
+        d = vars(self)
+        d["model_class"] = self.model_class.__name__
+        return d
+
+    def initialize_model(self):
+        return self.model_class(self)
 
 
 class AutoCastingScore(torch.nn.Module):
@@ -57,8 +69,18 @@ class AutoCastingScore(torch.nn.Module):
 
 def init_model_and_tokenizer(cfg: ModelConfig):
     model = AutoModelForSequenceClassification.from_pretrained(
-        cfg.name, torch_dtype="auto", device_map={"": "cuda"}
+        cfg.name,
+        device_map={"": "cuda"},
+        torch_dtype=torch.bfloat16,
+        quantization_config=BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+        ),
+        ignore_mismatched_sizes=True,
     )
+    model = prepare_model_for_kbit_training(model)
 
     if cfg.lora_modules is None and cfg.enable_lora:
         cfg.lora_modules = MODEL_REGISTRY.get(cfg.name, {}).get(
@@ -75,7 +97,8 @@ def init_model_and_tokenizer(cfg: ModelConfig):
 
     if cfg.enable_lora:
         lora_cfg = LoraConfig(
-            target_modules=cfg.lora_modules, task_type=TaskType.SEQ_CLS  # type: ignore
+            target_modules=cfg.lora_modules,
+            task_type=TaskType.SEQ_CLS,
         )
 
         # NOTE: adding task_type causes dtype errors, but is necessary for proper module saving
@@ -172,6 +195,14 @@ class TransformerPredictor(Predictor):
 MODEL_REGISTRY = {
     "meta-llama/Meta-Llama-3-8B": {
         "lr": 8e-5,
+        "lora_modules": DEFAULT_LORA_MODULES,
+    },
+    "meta-llama/Llama-2-7B-hf": {
+        "lr": 8e-5,
+        "lora_modules": DEFAULT_LORA_MODULES,
+    },
+    "meta-llama/Meta-Llama-3-70B": {
+        "lr": 4e-5,
         "lora_modules": DEFAULT_LORA_MODULES,
     },
     "mistralai/Mistral-7B-v0.1": {

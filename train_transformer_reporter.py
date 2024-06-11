@@ -74,11 +74,6 @@ def train_reporter_on_transformer(
         "n_test": n_test,
     }
 
-    # load a new, randomly initialized model for the strong model
-    strong_model = TransformerPredictor(
-        ModelConfig(strong_model_name, not disable_lora)
-    )
-
     exp_cfg = ExperimentConfig(
         reporter_method=reporter_method,
         max_num_oracle=max_num_oracle,
@@ -90,7 +85,7 @@ def train_reporter_on_transformer(
         weak_ds,
         oracle_ds,
         test_ds,
-        strong_model,
+        ModelConfig(strong_model_name, not disable_lora, TransformerPredictor),
         exp_cfg,
         dataset_cfg_dict=dataset_cfg_dict,
         **reporter_args,

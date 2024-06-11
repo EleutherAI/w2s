@@ -11,20 +11,20 @@ base_command = (
     "{weak_ds_path} "
     "{oracle_ds_path} "
     "{test_ds_path} "
-    "{n_train} 16748 2686 "  # NOTE
+    "{n_train} 10000 2686 "  # NOTE
     "--seed {seed} "
-    "--strong_model_name meta-llama/Meta-Llama-3-8B "
+    "--strong_model_name meta-llama/Meta-Llama-3-70B "
     "--reporter_method SftReporter "  # NOTE
     "--w2s_num_train_epochs {n_epochs} "
     "--oracle_warmup_steps 0 "
     "--eval_steps 50 "
     "--save_steps 50 "
     "--save_total_limit 1 "
-    "--per_device_train_batch_size 1 "
+    "--per_device_train_batch_size 2 "
     "--per_device_eval_batch_size 4 "
-    "--gradient_accumulation_steps 32 "
+    "--gradient_accumulation_steps 16 "
     f"--results_folder /mnt/ssd-1/alexm/w2s/results/{weak_labels_dir} "
-    '--run_name "ethics_excuse_{n_train}x{n_epochs}_seed{seed}_sft" '  # NOTE
+    '--run_name "70B_ethics_excuse_{n_train}x{n_epochs}_seed{seed}_sft" '  # NOTE
 )
 
 

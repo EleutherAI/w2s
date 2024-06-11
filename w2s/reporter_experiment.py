@@ -10,8 +10,9 @@ import torch
 from datasets import Dataset
 
 from w2s.metrics import acc_ci, roc_auc_ci
-from w2s.model import Predictor
+from w2s.model import ModelConfig
 from w2s.reporter import REPORTER_REGISTRY, Oracle
+from w2s.sft_utils import clear_mem
 
 
 @dataclass
@@ -30,12 +31,11 @@ def train_and_eval_reporter(
     oracle_ds: Dataset,
     # this dataset is untrusted
     test_ds: Dataset,
-    strong_model: Predictor,
+    predictor_config: ModelConfig,
     cfg: ExperimentConfig,
     dataset_cfg_dict: dict,
     **reporter_args,
 ):
-    predictor_cls = strong_model.__class__
     reporter_cls = REPORTER_REGISTRY[cfg.reporter_method]
 
     # fit reporter, with various numbers of queries allowed to the oracle
@@ -59,7 +59,8 @@ def train_and_eval_reporter(
         )
         # load a new predictor each time, since the weights
         # are often changed by the reporter
-        strong_model = predictor_cls(strong_model.cfg)
+        clear_mem()
+        strong_model = predictor_config.initialize_model()
 
         # load reporter
         reporter = reporter_cls(
@@ -136,11 +137,12 @@ def train_and_eval_reporter(
             }
         )
         results.append(result)
+        del strong_model
 
     # save configuration
     config: dict = {
         "dataset": dataset_cfg_dict,
-        "model": strong_model.to_dict(),
+        "model": predictor_config.to_dict(),
         "max_num_oracle": cfg.max_num_oracle,
         "reporter": reporter.to_dict(),
     }

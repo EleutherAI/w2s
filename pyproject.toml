@@ -21,6 +21,7 @@ dependencies = [
     "statsmodels != 0.14.1",
     # 4.0 introduced the breaking change of using return_dict=True by default
     "transformers>=4.0.0",
+    "bitsandbytes~=0.43.1",
     "wandb",
 ]
 version = "0.0.1"
