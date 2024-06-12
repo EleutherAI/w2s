@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from datasets import Dataset, DatasetDict
+from datasets import Dataset, DatasetDict, concatenate_datasets
 from transformers import DataCollatorWithPadding, Trainer, TrainingArguments
 
 from w2s.model import Predictor, TransformerPredictor
@@ -148,7 +148,8 @@ class SftReporter(Reporter):
         )
         self.w2s_trainer = lm_sft(
             ds_dict=weak_ds_dict,
-            model=self.strong_model,
+            model=self.strong_model.transformer,
+            tokenizer=self.strong_model.tokenizer,
             train_args=TrainingArguments(**self.weak_train_args),
             loss="xent",
             store_pre_hiddens=False,
@@ -198,7 +199,8 @@ class SftReporter(Reporter):
                 )
             lm_sft(
                 ds_dict=oracle_dict,
-                model=self.strong_model,
+                model=self.strong_model.transformer,
+                tokenizer=self.strong_model.tokenizer,
                 train_args=TrainingArguments(**ota),
                 loss="xent",
                 store_pre_hiddens=False,
@@ -271,12 +273,84 @@ class ActiveSftReporter(SftReporter):
         return Dataset.from_pandas(self.oracle.query_ids(oracle_ids))
 
 
-class DivDisReporter(Reporter):
-    ...
+class DivDisSFTReporter(Reporter):
+    """
+    Diversify and Disambiguate finetuning: https://arxiv.org/abs/2202.03418
 
+    Diversification:
+    - Train multiple heads with different random initializations
+    - Use trusted (weak) data with xent loss and diversify on unlabeled target (oracle) data
+    Disambiguation:
+    - Use oracle examples to select a head
+    - Calibrate that head with Platt scaling
+    """
 
-class DivDisFinetuningReporter(Reporter):
-    ...
+    def __init__(
+        self,
+        weak_ds: Dataset,
+        oracle: Oracle,
+        test_ds: Dataset,
+        strong_model: TransformerPredictor,
+        input_col: str = "txt",
+        save_dir: str = "./results",
+        **kwargs,
+    ):
+        super().__init__(weak_ds, oracle, test_ds, strong_model, input_col)
+        self.test_ds = ds_with_labels(test_ds)
+        split_args = split_args_by_prefix(kwargs, ("div_", "dis_"))
+        for split in split_args:
+            split_args[split][
+                "run_name"
+            ] = f"{split}{split_args[split].get('run_name', 'default')}"
+            split_args[split]["output_dir"] = str(Path(save_dir) / split[:-1])
+
+        self.weak_train_args = split_args["div_"]
+        self.oracle_train_args = split_args["dis_"]
+
+        assert input_col == "txt", "Only LM SFT is supported"
+
+    def fit(self, max_queries: int) -> "DivDisSFTReporter":
+        # TODO: figure out a better API for dealing with selecting trusted examples
+        # this will probably just involve adding an arg to train_transformer_reporter
+        # and logging the trusted sampling parameters
+
+        # ### Diversification ###
+        # we use label -1 for target data, and pass a custom loss function that deals
+        # with -1 examples separately
+        weak_ds = ds_with_labels(self.weak_ds, labels_column="soft_pred")
+        train_target_ds = (
+            Dataset.from_pandas(self.oracle.get_inputs())
+            .shuffle()
+            .select(range(len(weak_ds)))
+        )  # NOTE: this is a hyperparameter
+        train_target_ds = train_target_ds.add_column(
+            "labels", torch.full((len(train_target_ds),), -1)
+        )
+        weak_ds = concatenate_datasets([weak_ds, train_target_ds])
+        weak_ds_dict = DatasetDict(train=weak_ds, test=self.test_ds)
+
+        self.div_trainer = lm_sft(
+            ds_dict=weak_ds_dict,
+            model=self.strong_model.transformer,
+            tokenizer=self.strong_model.tokenizer,
+            train_args=TrainingArguments(**self.weak_train_args),
+            loss="divdis",
+            store_pre_hiddens=False,
+            store_post_hiddens=False,
+            cfg=self.to_dict(),
+            predict_dict=None,
+        )
+
+        # then disambiguate
+        pass
+
+    def to_dict(self) -> dict:
+        return {
+            "method": self.__class__.__name__,
+            "weak_train_args": self.weak_train_args,
+            "oracle_train_args": self.oracle_train_args,
+            "model": self.strong_model.to_dict(),
+        }
 
 
 class DivDisProbingReporter(Reporter):

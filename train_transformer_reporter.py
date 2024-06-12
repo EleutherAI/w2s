@@ -74,6 +74,15 @@ def train_reporter_on_transformer(
         "n_test": n_test,
     }
 
+    assert (reporter_args.get("num_heads", 1) == 1) == (
+        "DivDis" not in reporter_method
+    ), "Must pass num_heads>1 exactly when using DivDis"
+    mcfg = ModelConfig(
+        strong_model_name,
+        not disable_lora,
+        TransformerPredictor,
+        num_heads=reporter_args.get("num_heads", 1),
+    )
     exp_cfg = ExperimentConfig(
         reporter_method=reporter_method,
         max_num_oracle=max_num_oracle,
@@ -85,7 +94,7 @@ def train_reporter_on_transformer(
         weak_ds,
         oracle_ds,
         test_ds,
-        ModelConfig(strong_model_name, not disable_lora, TransformerPredictor),
+        mcfg,
         exp_cfg,
         dataset_cfg_dict=dataset_cfg_dict,
         **reporter_args,

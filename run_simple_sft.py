@@ -36,7 +36,8 @@ def main(
 
     lm_sft(
         ds_dict=ds_dict,
-        model=model,
+        model=model.transformer,
+        tokenizer=model.tokenizer,
         train_args=TrainingArguments(**train_args),
         loss="xent",
         store_pre_hiddens=False,

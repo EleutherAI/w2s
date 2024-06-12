@@ -6,13 +6,14 @@ import torch
 from datasets import Dataset, DatasetDict
 from transformers import (
     DataCollatorWithPadding,
+    PreTrainedModel,
+    PreTrainedTokenizer,
     Trainer,
     TrainingArguments,
 )
 
 import wandb
-from w2s.loss import log_confidence_loss
-from w2s.model import TransformerPredictor
+from w2s.loss import CustomLossTrainer, DivDisTrainer
 from w2s.sft_utils import (
     assert_type,
     clear_mem,
@@ -21,68 +22,6 @@ from w2s.sft_utils import (
     get_gpu_mem_used,
     move_best_ckpt,
 )
-
-
-class CustomLossTrainer(Trainer):
-    def __init__(
-        self,
-        loss_name: str,
-        *args,
-        resume_from_optimizer_checkpoint: Optional[str] = None,
-        **kwargs,
-    ):
-        super().__init__(*args, **kwargs)
-        self.loss_name = loss_name
-        self.resume_from_optimizer_checkpoint = resume_from_optimizer_checkpoint
-
-    def compute_loss(self, model, inputs, return_outputs=False):
-        if (
-            self.state.global_step == 0
-            and self.resume_from_optimizer_checkpoint is not None
-            and self.optimizer is not None
-        ):
-            # check if adam exp buffer is empty, and then load the optimizer state if it is
-            if not isinstance(self.optimizer, torch.optim.AdamW):
-                assert isinstance(self.optimizer.optimizer, torch.optim.AdamW)
-            self.optimizer: torch.optim.AdamW
-            state = self.optimizer.state[self.optimizer.param_groups[0]["params"][0]]
-            if "exp_avg" not in state:
-                # update the step, exp_avg, and exp_avg_sq of the optimizer state
-                print(
-                    "Loading optimizer state from",
-                    self.resume_from_optimizer_checkpoint,
-                )
-                state_dict = torch.load(
-                    self.resume_from_optimizer_checkpoint,
-                    map_location=self.model.device,
-                )["state"]
-                trainable_params = (
-                    p for p in self.model.parameters() if p.requires_grad
-                )
-                for state, p in zip(state_dict.values(), trainable_params):  # type: ignore
-                    self.optimizer.state[p] = state  # type: ignore
-                self.resume_from_optimizer_checkpoint = None
-
-        if self.state.global_step == 1 and self.optimizer is not None:
-            state = self.optimizer.state[self.optimizer.param_groups[0]["params"][1]]
-            if "exp_avg" in state:
-                print(f"Adam buffer dtype: {state['exp_avg'].dtype}")
-
-        labels = inputs.pop("labels").float()
-
-        outputs = model(**inputs)
-        if self.loss_name == "xent":
-            aux_weight = 0
-        elif self.loss_name == "logconf":
-            aux_weight = 0.5
-        else:
-            raise ValueError(f"Unknown loss: {self.loss_name}")
-
-        loss = log_confidence_loss(
-            outputs.logits, labels, self.state.global_step, aux_coef=aux_weight
-        )
-
-        return (loss, outputs) if return_outputs else loss
 
 
 def prepare_for_trainer(
@@ -112,7 +51,8 @@ def prepare_for_trainer(
 
 def lm_sft(
     ds_dict: DatasetDict,
-    model: TransformerPredictor,
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizer,
     train_args: TrainingArguments,
     loss: str,
     store_pre_hiddens: bool,
@@ -142,21 +82,22 @@ def lm_sft(
     clear_mem()
     print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use before training")
 
-    ds_dict = assert_type(DatasetDict, prepare_for_trainer(ds_dict, model.tokenizer))
+    ds_dict = assert_type(DatasetDict, prepare_for_trainer(ds_dict, tokenizer))
 
-    trainer = CustomLossTrainer(
+    cls = DivDisTrainer if loss == "divdis" else CustomLossTrainer
+    trainer = cls(
         loss_name=loss,
         resume_from_optimizer_checkpoint=resume_from_checkpoint,
         args=train_args,
         compute_metrics=compute_acc_and_auroc,
         data_collator=DataCollatorWithPadding(
-            model.tokenizer, max_length=1024, padding="max_length"
+            tokenizer, max_length=1024, padding="max_length"
         ),  # NOTE: this could mess up some datasets
         eval_dataset={
             k: ds_dict[k] for k in {"val", "test"}.intersection(ds_dict.keys())
         },
-        model=model.transformer,
-        tokenizer=model.tokenizer,
+        model=model,
+        tokenizer=tokenizer,
         train_dataset=ds_dict["train"],
     )
 
@@ -174,7 +115,7 @@ def lm_sft(
     # store pre hiddens
     if store_pre_hiddens:
         print("Gathering hiddens")
-        hiddens = gather_hiddens(model.transformer, ds_dict["train"])
+        hiddens = gather_hiddens(model, ds_dict["train"])
         torch.save(hiddens, save_dir / "pre_hiddens.pt")
 
     # train
@@ -202,7 +143,7 @@ def lm_sft(
                 print(f"Predictions for {name} already exist. Skipping.")
                 continue
             predict_ds = prepare_for_trainer(
-                predict_ds, model.tokenizer, discard_other_cols=False
+                predict_ds, tokenizer, discard_other_cols=False
             )
             print("Gathering predictions for", name)
             pred_logits = torch.from_numpy(trainer.predict(predict_ds).predictions)  # type: ignore
@@ -213,7 +154,7 @@ def lm_sft(
     # save hiddens
     if store_post_hiddens:
         print("Gathering hiddens")
-        hiddens = gather_hiddens(model.transformer, ds_dict["train"])
+        hiddens = gather_hiddens(model, ds_dict["train"])
         torch.save(hiddens, save_dir / "post_hiddens.pt")
 
     wandb.finish()

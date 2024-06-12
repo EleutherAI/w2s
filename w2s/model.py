@@ -42,6 +42,7 @@ class ModelConfig(PredictorConfig):
     enable_lora: bool
     model_class: type
     lora_modules: Optional[List[str]] = None
+    num_heads: int = 1
 
     def to_dict(self):
         d = vars(self)
@@ -65,6 +66,34 @@ class AutoCastingScore(torch.nn.Module):
         return torch.nn.functional.linear(
             hiddens.to(self.weight.dtype), self.weight, None
         ).to(self.output_dtype)
+
+
+class MultiHeadAutoCastingScore(torch.nn.Module):
+    def __init__(
+        self,
+        score: torch.nn.Linear,
+        output_dtype: torch.dtype = torch.bfloat16,
+        num_heads: int = 12,
+    ):
+        super().__init__()
+        # shuffle the weights to make sure the heads aren't identical, but to
+        # keep approximately the same initialization distribution
+        weight = torch.stack(
+            [
+                score.weight[torch.randperm(score.weight.size(0))]
+                .to(torch.float32)
+                .data
+                for _ in range(num_heads)
+            ],
+            dim=1,
+        )
+
+        self.weight = torch.nn.Parameter(weight)
+
+        self.output_dtype = output_dtype
+
+    def forward(self, hiddens):
+        return (hiddens.to(self.weight.dtype) @ self.weight).to(self.output_dtype)
 
 
 def init_model_and_tokenizer(cfg: ModelConfig):
@@ -105,11 +134,19 @@ def init_model_and_tokenizer(cfg: ModelConfig):
         # and for making the lm head trainable, so we need to wrap it in an AutoCastingScore
         for attr in ["score", "classifier"]:
             if hasattr(model, attr):
-                setattr(
-                    model,
-                    attr,
-                    AutoCastingScore(getattr(model, attr), output_dtype=model.dtype),
+                score = (
+                    MultiHeadAutoCastingScore(
+                        getattr(model, attr),
+                        output_dtype=model.dtype,
+                        num_heads=cfg.num_heads,
+                    )
+                    if cfg.num_heads > 1
+                    else AutoCastingScore(
+                        getattr(model, attr), output_dtype=model.dtype
+                    )
                 )
+
+                setattr(model, attr, score)
                 break
         else:
             raise ValueError("Could not find classifier head in model.")

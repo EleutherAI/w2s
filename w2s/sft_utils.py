@@ -16,8 +16,8 @@ def compute_acc_and_auroc(eval_pred):
 
     hard_labels = (labels > 0.5).long()
     return dict(
-        accuracy=predictions.argmax(dim=1).eq(hard_labels).float().mean(),
-        auroc=roc_auc(hard_labels, predictions[:, 1]),
+        accuracy=predictions.argmax(dim=-1).eq(hard_labels).float().mean(),
+        auroc=roc_auc(hard_labels, predictions[..., 1]).mean(),
     )
 
 
