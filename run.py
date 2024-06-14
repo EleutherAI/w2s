@@ -21,7 +21,7 @@ def run_train(cfg: SFTConfig):
         cfg.dataset, cfg.n_train, cfg.n_val, cfg.n_test, cfg.n_predict
     )
 
-    train_halves = splits["train"].train_test_split(test_size=0.5, seed=seed)
+    train_halves = splits["train"].train_test_split(test_size=0.5, seed=42)
     splits["weak_train"] = train_halves["train"]
     splits["strong_train"] = train_halves["test"]
 
@@ -184,7 +184,7 @@ def run_train(cfg: SFTConfig):
         )
         # assert (prev_train_preds_ds["id"] == s2s_ds_dict["train"]["id"])
         # assert (prev_val_preds_ds["id"] == s2s_ds_dict["val"]["id"])
-        s2s_predict_dict = {"strong_train": splits["train"], "val": splits["val"]}
+        s2s_predict_dict = {"train": splits["strong_train"], "val": splits["val"]}
         train(
             s2s_ds_dict,
             model_cfg,
@@ -192,7 +192,7 @@ def run_train(cfg: SFTConfig):
             cfg.to_dict(),
             transfer=True,
             predict_dict=s2s_predict_dict,
-            acts_dir=root / cfg_name / f"s2s-{s2s_iter}" / "activations",
+            acts_dir=shared_root / cfg_name / f"s2s-{s2s_iter}" / "activations",
         )
 
         prev = f"s2s-{s2s_iter}"

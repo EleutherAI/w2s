@@ -39,6 +39,7 @@ class CustomLossTrainer(Trainer):
         loss_name: str,
         loss_cfg: LossConfig,
         transfer: bool,
+        buffer_size: int,
         *args,
         **kwargs,
     ):
@@ -46,9 +47,9 @@ class CustomLossTrainer(Trainer):
         self.loss_name = loss_name
         self.loss_cfg = loss_cfg
         self.transfer = transfer
-        if loss_name == "logconf":
+        if loss_name in ["logconf", "entropy"]:
             self.buffer = []
-            # self.buffer_size = kwargs["buffer_size"]
+            self.buffer_size = buffer_size
 
 
     def compute_loss(self, model, inputs, return_outputs=False):
@@ -66,7 +67,7 @@ class CustomLossTrainer(Trainer):
                 balance_batch=self.loss_cfg.balance_batch,
                 harden=True,
                 buffer=self.buffer,
-                # buffer_size=self.buffer_size,
+                buffer_size=self.buffer_size,
             )
         elif self.loss_name == 'entropy':
             loss = log_confidence_loss(
@@ -77,6 +78,8 @@ class CustomLossTrainer(Trainer):
                 warmup_steps=self.loss_cfg.logconf_warmup_steps,
                 balance_batch=self.loss_cfg.balance_batch,
                 harden=False,
+                buffer=self.buffer,
+                buffer_size=self.buffer_size,
             )
         elif self.loss_name == 'xent':
             loss = cross_entropy_loss(
@@ -217,7 +220,7 @@ def train(
                     ds_dict[name] = ds
                 if cfg['probe_relabel']:
                     # print(lshape(ds["labels"]))
-                    ds = ds.remove_columns("labels").add_column("labels", preds[:, 1].cpu().numpy())
+                    ds = ds.remove_columns("labels").add_column("labels", preds[:, 1].detach().cpu().numpy())
                     ds_dict[name] = ds
 
     if results_path.exists():
@@ -241,6 +244,7 @@ def train(
     trainer = CustomLossTrainer(
         loss_name=cfg["loss_name"],
         loss_cfg=cfg["loss"],
+        buffer_size=cfg["batch_size"],
         transfer=transfer,
         args=train_args,
         compute_metrics=compute_metrics,

@@ -23,6 +23,9 @@ class LogConfidenceLossConfig(LossConfig):
 class ConfidenceWindowLossConfig(LossConfig):
     radius: Union[float, literal("midweak")] = 0.15
 
+    def to_dict(self):
+        return {"radius": self.radius if isinstance(self.radius, float) else "midweak"}
+
 @dataclass
 class LogEntropyLossConfig(LogConfidenceLossConfig):
     pass
