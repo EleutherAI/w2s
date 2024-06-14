@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +13,7 @@ from datasets import Dataset
 from w2s.metrics import acc_ci, roc_auc_ci
 from w2s.model import ModelConfig
 from w2s.reporter import REPORTER_REGISTRY, Oracle
-from w2s.sft_utils import clear_mem
+from w2s.sft_utils import clear_mem, get_gpu_mem_used
 
 
 @dataclass
@@ -60,6 +61,8 @@ def train_and_eval_reporter(
         # load a new predictor each time, since the weights
         # are often changed by the reporter
         clear_mem()
+        time.sleep(15)
+        get_gpu_mem_used()
         strong_model = predictor_config.initialize_model()
 
         # load reporter

@@ -107,34 +107,51 @@ class DivDisTrainer(CustomLossTrainer):
 
         outputs = model(**inputs)
         trusted_logits = outputs.logits[~target_idxs]
-        xent_loss = log_confidence_loss(
-            trusted_logits, labels, self.state.global_step, aux_coef=0
-        )
+        h = trusted_logits.shape[-2]
+        trusted_logits = trusted_logits.reshape(-1, trusted_logits.shape[-1])
+        trusted_labels = labels[~target_idxs].repeat_interleave(
+            h, dim=0
+        )  # [b,] -> [b * h,]
 
-        target_logits = outputs.logits[target_idxs]
-        target_probs = torch.softmax(target_logits, dim=-1)
-        cat_target_probs = torch.cat([target_probs, *self.target_buffer], dim=0)
-        indep_loss = mutual_info_loss(cat_target_probs)
-
-        if self.reg_guess is None:
-            # assume uniform distribution
-            reg_guess = torch.ones_like(target_probs) / target_probs.shape[-1]
-        else:
-            reg_guess = (
-                self.reg_guess.expand_as(target_probs)
-                .type_as(target_probs)
-                .to(target_probs.device)
+        xent_loss = (
+            log_confidence_loss(
+                trusted_logits, trusted_labels, self.state.global_step, aux_coef=0
             )
-        # KL divergence over the last dimension, averaged over heads and batch
-        reg_loss = (
-            reg_guess
-            * (reg_guess.log() - torch.log_softmax(target_logits)).sum(dim=-1).mean()
+            if trusted_logits.shape[0] > 0
+            else 0
         )
 
-        self.target_buffer.append(target_probs.detach())
-        self.target_buffer = self.target_buffer[-self.max_buffer_size :]
+        if target_idxs.any():
+            target_logits = outputs.logits[target_idxs]
+            target_probs = torch.softmax(target_logits, dim=-1)
+            cat_target_probs = torch.cat([target_probs, *self.target_buffer], dim=0)
+            indep_loss = mutual_info_loss(cat_target_probs)
 
-        return xent_loss + self.indep_coef * indep_loss + self.reg_coef * reg_loss
+            if self.reg_guess is None:
+                # assume uniform distribution
+                reg_guess = torch.ones_like(target_probs) / target_probs.shape[-1]
+            else:
+                reg_guess = (
+                    self.reg_guess.expand_as(target_probs)
+                    .type_as(target_probs)
+                    .to(target_probs.device)
+                )
+            # KL divergence over the last dimension, averaged over heads and batch
+            reg_loss = (
+                (
+                    reg_guess
+                    * (reg_guess.log() - torch.log_softmax(target_logits, dim=-1))
+                )
+                .sum(dim=-1)
+                .mean()
+            )
+
+            self.target_buffer.append(target_probs.detach())
+            self.target_buffer = self.target_buffer[-self.max_buffer_size :]
+        else:
+            indep_loss, reg_loss = 0, 0
+        loss = xent_loss + self.indep_coef * indep_loss + self.reg_coef * reg_loss
+        return (loss, outputs) if return_outputs else loss
 
 
 def mutual_info_loss(probs):

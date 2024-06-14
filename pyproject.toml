@@ -22,6 +22,7 @@ dependencies = [
     # 4.0 introduced the breaking change of using return_dict=True by default
     "transformers>=4.0.0",
     "bitsandbytes~=0.43.1",
+    "einops~=0.8.0",
     "wandb",
 ]
 version = "0.0.1"

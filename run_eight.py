@@ -2,29 +2,32 @@ import subprocess
 from multiprocessing import Process
 
 # Define the datasets and respective GPU ids
-gpu_ids = [0, 1, 2, 3, 4, 5, 6, 7]  # NOTE
-weak_labels_dir = "ethics_deontology_excuse_only"  # NOTE
-
+gpu_ids = [7]  # NOTE
+weak_labels_dir = "amazon_polarity_title_only"  # NOTE
+cfgs = [
+    (32, 48),  # NOTE
+]
 base_command = (
     "CUDA_VISIBLE_DEVICES={gpu_id} "
     "python train_transformer_reporter.py "
     "{weak_ds_path} "
     "{oracle_ds_path} "
     "{test_ds_path} "
-    "{n_train} 10000 2686 "  # NOTE
+    "{n_train} 500 2686 "  # NOTE
+    "--oracle_pool_size 10000 "
+    "--num_heads 8 "
     "--seed {seed} "
-    "--strong_model_name meta-llama/Meta-Llama-3-70B "
-    "--reporter_method SftReporter "  # NOTE
-    "--w2s_num_train_epochs {n_epochs} "
-    "--oracle_warmup_steps 0 "
+    "--strong_model_name meta-llama/Meta-Llama-3-8B "
+    "--reporter_method DivDisSftReporter "  # NOTE
+    "--num_train_epochs {n_epochs} "
     "--eval_steps 50 "
     "--save_steps 50 "
     "--save_total_limit 1 "
-    "--per_device_train_batch_size 2 "
-    "--per_device_eval_batch_size 4 "
-    "--gradient_accumulation_steps 16 "
+    "--per_device_train_batch_size 32 "
+    "--per_device_eval_batch_size 32 "
+    "--gradient_accumulation_steps 1 "
     f"--results_folder /mnt/ssd-1/alexm/w2s/results/{weak_labels_dir} "
-    '--run_name "70B_ethics_excuse_{n_train}x{n_epochs}_seed{seed}_sft" '  # NOTE
+    '--run_name "am_title_{n_train}x{n_epochs}_seed{seed}_divdis" '  # NOTE
 )
 
 
@@ -39,12 +42,12 @@ test_ds_path = f"/mnt/ssd-1/alexm/w2s/results/{weak_labels_dir}/weak_test"
 processes = []
 
 # Loop over datasets and gpu_ids
-for gpu_id, seed in zip(gpu_ids, range(1000, 1000 + len(gpu_ids))):
+for gpu_id, (n_train, n_epochs) in zip(gpu_ids, cfgs):
     command = base_command.format(
         gpu_id=gpu_id,
-        n_train=1,  # NOTE
-        n_epochs=0,  # NOTE
-        seed=seed,
+        n_train=n_train,  # NOTE
+        n_epochs=n_epochs,  # NOTE
+        seed=1000,  # NOTE
         weak_ds_path=weak_ds_path,
         oracle_ds_path=oracle_ds_path,
         test_ds_path=test_ds_path,

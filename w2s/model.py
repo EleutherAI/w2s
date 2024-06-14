@@ -45,7 +45,7 @@ class ModelConfig(PredictorConfig):
     num_heads: int = 1
 
     def to_dict(self):
-        d = vars(self)
+        d = vars(self).copy()
         d["model_class"] = self.model_class.__name__
         return d
 
@@ -81,7 +81,7 @@ class MultiHeadAutoCastingScore(torch.nn.Module):
         weight = torch.stack(
             [
                 score.weight[torch.randperm(score.weight.size(0))]
-                .to(torch.float32)
+                .mT.to(torch.float32)
                 .data
                 for _ in range(num_heads)
             ],
@@ -93,7 +93,9 @@ class MultiHeadAutoCastingScore(torch.nn.Module):
         self.output_dtype = output_dtype
 
     def forward(self, hiddens):
-        return (hiddens.to(self.weight.dtype) @ self.weight).to(self.output_dtype)
+        return torch.einsum(
+            "btd,dhk->bthk", hiddens.to(self.weight.dtype), self.weight
+        ).to(self.output_dtype)
 
 
 def init_model_and_tokenizer(cfg: ModelConfig):

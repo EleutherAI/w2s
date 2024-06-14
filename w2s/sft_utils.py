@@ -13,6 +13,8 @@ from w2s.utils import assert_type
 
 def compute_acc_and_auroc(eval_pred):
     predictions, labels = map(torch.from_numpy, eval_pred)
+    if predictions.dim() == 3:
+        predictions = predictions.mean(dim=1)
 
     hard_labels = (labels > 0.5).long()
     return dict(
