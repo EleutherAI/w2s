@@ -49,7 +49,7 @@ for task in tasks:
     for ds, minibatch in configs:
         jobs.append(
             add_log(
-                f"python run.py --dataset {ds} --minibatch_size {minibatch} {task}",
+                f"python run.py --dataset {ds} --minibatch_size {minibatch} {task} --shared_folder repro_{date}",
                 ds,
                 task
             )
