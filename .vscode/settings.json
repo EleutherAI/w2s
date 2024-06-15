@@ -1,8 +1,0 @@
-{
-    "python.analysis.typeCheckingMode": "basic",
-    "python.testing.pytestArgs": [
-        "tests"
-    ],
-    "python.testing.pytestEnabled": true,
-    "python.testing.unittestEnabled": false,
-}
