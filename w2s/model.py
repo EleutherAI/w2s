@@ -43,6 +43,7 @@ class ModelConfig(PredictorConfig):
     model_class: type
     lora_modules: Optional[List[str]] = None
     num_heads: int = 1
+    quantize: bool = False
 
     def to_dict(self):
         d = vars(self).copy()
@@ -81,7 +82,7 @@ class MultiHeadAutoCastingScore(torch.nn.Module):
         weight = torch.stack(
             [
                 score.weight[torch.randperm(score.weight.size(0))]
-                .mT.to(torch.float32)
+                .to(torch.float32)
                 .data
                 for _ in range(num_heads)
             ],
@@ -94,7 +95,7 @@ class MultiHeadAutoCastingScore(torch.nn.Module):
 
     def forward(self, hiddens):
         return torch.einsum(
-            "btd,dhk->bthk", hiddens.to(self.weight.dtype), self.weight
+            "btd,khd->bthk", hiddens.to(self.weight.dtype), self.weight
         ).to(self.output_dtype)
 
 
@@ -108,10 +109,13 @@ def init_model_and_tokenizer(cfg: ModelConfig):
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=True,
             bnb_4bit_quant_type="nf4",
-        ),
+        )
+        if cfg.quantize
+        else None,
         ignore_mismatched_sizes=True,
     )
-    model = prepare_model_for_kbit_training(model)
+    if cfg.quantize and cfg.enable_lora:
+        model = prepare_model_for_kbit_training(model)
 
     if cfg.lora_modules is None and cfg.enable_lora:
         cfg.lora_modules = MODEL_REGISTRY.get(cfg.name, {}).get(
@@ -195,6 +199,7 @@ class TransformerPredictor(Predictor):
     def __init__(self, cfg: ModelConfig):
         super().__init__(cfg)
         self.transformer, self.tokenizer = init_model_and_tokenizer(cfg)
+        self.cfg = cfg
 
     def __call__(self, inputs, output_hidden_states=False):
         # inputs are text strings

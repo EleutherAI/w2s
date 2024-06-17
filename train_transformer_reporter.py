@@ -8,29 +8,29 @@ import torch
 from datasets import Dataset, load_from_disk
 
 from w2s.model import ModelConfig, TransformerPredictor
+from w2s.reporter import SftStageConfig
 from w2s.reporter_experiment import ExperimentConfig, train_and_eval_reporter
 from w2s.sft_config import set_default_args
-from w2s.utils import assert_type, uncertainty_sample
+from w2s.utils import assert_type, split_args_by_prefix
 
 
 def train_reporter_on_transformer(
     weak_ds_path: str,
     oracle_ds_path: str,
     test_ds_path: str,
-    n_train: int,
-    max_num_oracle: int,
+    weak_pool_size: int,
+    oracle_pool_size: int,
     n_test: int,
     # model config
     strong_model_name: str = "meta-llama/Meta-Llama-3-8B",
     disable_lora: bool = False,
     # ExperimentConfig
-    reporter_method: str = "SftReporter",
+    reporter_stages=1,
     results_folder: Optional[str] = None,
     run_name: str = "default",
     input_col: str = "txt",
     seed: int = 42,
     num_heads: int = 1,
-    oracle_pool_size: Optional[int] = None,
     **reporter_args,
 ):
     random.seed(seed)
@@ -41,14 +41,23 @@ def train_reporter_on_transformer(
     reporter_args = set_default_args(
         reporter_args, model_name=strong_model_name, run_name=run_name
     )
-    if oracle_pool_size is None:
-        print("Setting oracle pool size to max_num_oracle since not specified.")
-        oracle_pool_size = max_num_oracle
 
     # default to parent / "results"
     if results_folder is None:
         results_folder = str(Path(__file__).parent / "results")
     reporter_args["output_dir"] = str(Path(results_folder) / run_name)
+
+    stage_args = split_args_by_prefix(
+        reporter_args, [f"stage{i}_" for i in range(reporter_stages)]
+    )
+    for stage in stage_args:
+        stage_args[stage]["output_dir"] = str(
+            Path(reporter_args["output_dir"]) / stage[:-1]
+        )
+        stage_args[stage]["run_name"] = f"{run_name}-{stage[:-1]}"
+    stages = [
+        SftStageConfig(**stage_args[f"stage{i}_"]) for i in range(reporter_stages)
+    ]
 
     # load datasets
     weak_ds = assert_type(Dataset, load_from_disk(weak_ds_path))
@@ -64,27 +73,14 @@ def train_reporter_on_transformer(
         "weak_ds_path": str(weak_ds_path),
         "oracle_ds_path": str(oracle_ds_path),
         "test_ds_path": str(test_ds_path),
-        "n_train": n_train,
-        "max_num_oracle": max_num_oracle,
         "n_test": n_test,
         "weak_pool_size": len(weak_ds),
         "oracle_pool_size": len(oracle_ds),
     }
-    if reporter_method == "ActiveSftReporter" or "DivDis" in reporter_method:
-        print("Selecting examples with lowest entropy for training.")
-        # select the weak examples with *lowest* entropy (easy examples)
-        probs = torch.as_tensor(weak_ds["soft_pred"])
-        weak_ds = weak_ds.select(
-            uncertainty_sample(probs, n_train, "sample", most_confident=True)
-        )
-        dataset_cfg_dict["weak_uncertainty_sample"] = "sample_most_confident"
-    else:
-        weak_ds = weak_ds.shuffle().select(range(n_train))
-        dataset_cfg_dict["weak_uncertainty_sample"] = "random"
+    weak_ds = weak_ds.shuffle().select(range(weak_pool_size))
+    dataset_cfg_dict["weak_uncertainty_sample"] = "random"
 
-    assert (num_heads == 1) == (
-        "DivDis" not in reporter_method
-    ), "Must pass num_heads>1 exactly when using DivDis"
+    assert num_heads == 1
     mcfg = ModelConfig(
         strong_model_name,
         not disable_lora,
@@ -92,8 +88,7 @@ def train_reporter_on_transformer(
         num_heads=num_heads,
     )
     exp_cfg = ExperimentConfig(
-        reporter_method=reporter_method,
-        max_num_oracle=max_num_oracle,
+        stages=stages,
         results_folder=results_folder,
         run_name=run_name,
         input_col=input_col,
@@ -105,7 +100,6 @@ def train_reporter_on_transformer(
         mcfg,
         exp_cfg,
         dataset_cfg_dict=dataset_cfg_dict,
-        **reporter_args,
     )
 
 

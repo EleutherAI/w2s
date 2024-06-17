@@ -94,4 +94,5 @@ def uncertainty_sample(
         )
     else:
         raise ValueError(f"Invalid method: {method}")
+    idxs = idxs[torch.randperm(len(idxs))]
     return idxs

@@ -2,10 +2,173 @@ import subprocess
 from multiprocessing import Process
 
 # Define the datasets and respective GPU ids
-gpu_ids = [7]  # NOTE
+gpu_ids = [3, 4, 5, 6, 7]  # NOTE
 weak_labels_dir = "amazon_polarity_title_only"  # NOTE
 cfgs = [
-    (32, 48),  # NOTE
+    # CFG 1: LP(GT), FT(weak) frozen head, FT(oracle) reinit head
+    [
+        {
+            "modules_with_grad": "head",
+            "type": "oracle",
+            "size": 32,
+            "weight_decay": 1.0,
+            "sampling": "random",
+            "num_train_epochs": 100,
+            "n_test": 500,
+        },
+        {
+            "modules_with_grad": "body",
+            "type": "weak",
+            "size": 128,
+            "sampling": "most_confident_label",
+            "num_train_epochs": 16,
+            "n_test": 500,
+        },
+        {
+            "modules_with_grad": "all",
+            "reinit_head": True,
+            "type": "oracle",
+            "size": 64,
+            "sampling": "least_confident_pred",
+            "num_train_epochs": 16,
+        },
+    ],
+    # CFG 2: LP(weak), FT(weak) frozen head, FT(oracle)
+    [
+        {
+            "modules_with_grad": "head",
+            "type": "weak",
+            "size": 32,
+            "sampling": "most_confident_label",
+            "weight_decay": 1.0,
+            "num_train_epochs": 100,
+            "n_test": 500,
+        },
+        {
+            "modules_with_grad": "body",
+            "type": "weak",
+            "size": 128,
+            "sampling": "most_confident_label",
+            "num_train_epochs": 16,
+            "n_test": 500,
+        },
+        {
+            "modules_with_grad": "all",
+            "reinit_head": False,
+            "type": "oracle",
+            "size": 64,
+            "sampling": "least_confident_pred",
+            "num_train_epochs": 16,
+        },
+    ],
+    # CFG 3: LP with weak, FT with gt, FT with weak, FT with gt
+    [
+        {
+            "modules_with_grad": "head",
+            "type": "weak",
+            "size": 1024,
+            "sampling": "most_confident_label",
+            "num_train_epochs": 3,
+            "n_test": 500,
+        },
+        {
+            "modules_with_grad": "all",
+            "type": "oracle",
+            "size": 32,
+            "sampling": "least_confident_pred",
+            "num_train_epochs": 50,
+            "n_test": 500,
+        },
+        {
+            "modules_with_grad": "all",
+            "type": "weak",
+            "size": 64,
+            "sampling": "most_confident_label",
+            "num_train_epochs": 50,
+            "n_test": 500,
+        },
+        {
+            "modules_with_grad": "all",
+            "type": "oracle",
+            "size": 32,
+            "sampling": "least_confident_pred",
+            "num_train_epochs": 50,
+            "n_test": 500,
+        },
+    ],
+    # CFG 4: LP with weak, FT with gt, FT with weak with random head, FT with gt again but body, then ft with gt  # noqa
+    [
+        {
+            "modules_with_grad": "head",
+            "type": "weak",
+            "size": 1024,
+            "sampling": "most_confident_label",
+            "num_train_epochs": 3,
+            "n_test": 500,
+        },
+        {
+            "modules_with_grad": "all",
+            "type": "oracle",
+            "size": 64,
+            "sampling": "least_confident_pred",
+            "num_train_epochs": 20,
+            "n_test": 500,
+        },
+        {
+            "modules_with_grad": "all",
+            "reinit_head": True,
+            "type": "weak",
+            "size": 1024,
+            "sampling": "most_confident_label",
+            "num_train_epochs": 1,
+            "n_test": 500,
+        },
+        {
+            "modules_with_grad": "body",
+            "type": "oracle",
+            "size": 32,
+            "sampling": "least_confident_pred",
+            "num_train_epochs": 50,
+            "n_test": 500,
+        },
+        {
+            "modules_with_grad": "all",
+            "type": "oracle",
+            "size": 32,
+            "sampling": "least_confident_pred",
+            "num_train_epochs": 50,
+            "n_test": 500,
+        },
+    ],
+    # CFG 5: LP with weak, FT with weak, LP with gt
+    [
+        {
+            "modules_with_grad": "head",
+            "type": "weak",
+            "size": 128,
+            "sampling": "most_confident_label",
+            "num_train_epochs": 5,
+            "n_test": 500,
+        },
+        {
+            "modules_with_grad": "all",
+            "type": "weak",
+            "size": 512,
+            "sampling": "most_confident_label",
+            "num_train_epochs": 10,
+            "n_test": 500,
+        },
+        {
+            "modules_with_grad": "head",
+            "type": "oracle",
+            "size": 32,
+            "sampling": "least_confident_pred",
+            "weight_decay": 1.0,
+            "num_train_epochs": 10,
+            "n_test": 500,
+        },
+    ],
+    # TODO: add more
 ]
 base_command = (
     "CUDA_VISIBLE_DEVICES={gpu_id} "
@@ -13,21 +176,19 @@ base_command = (
     "{weak_ds_path} "
     "{oracle_ds_path} "
     "{test_ds_path} "
-    "{n_train} 500 2686 "  # NOTE
-    "--oracle_pool_size 10000 "
-    "--num_heads 8 "
+    "8_000 8_000 2686 "  # NOTE
     "--seed {seed} "
     "--strong_model_name meta-llama/Meta-Llama-3-8B "
-    "--reporter_method DivDisSftReporter "  # NOTE
-    "--num_train_epochs {n_epochs} "
+    "--reporter_stages {reporter_stages} "
+    "--num_train_epochs 1 "
     "--eval_steps 50 "
     "--save_steps 50 "
     "--save_total_limit 1 "
-    "--per_device_train_batch_size 32 "
-    "--per_device_eval_batch_size 32 "
-    "--gradient_accumulation_steps 1 "
+    "--per_device_train_batch_size 1 "
+    "--per_device_eval_batch_size 3 "
+    "--gradient_accumulation_steps 32 "
     f"--results_folder /mnt/ssd-1/alexm/w2s/results/{weak_labels_dir} "
-    '--run_name "am_title_{n_train}x{n_epochs}_seed{seed}_divdis" '  # NOTE
+    '--run_name "{run_name}" '  # NOTE
 )
 
 
@@ -42,17 +203,25 @@ test_ds_path = f"/mnt/ssd-1/alexm/w2s/results/{weak_labels_dir}/weak_test"
 processes = []
 
 # Loop over datasets and gpu_ids
-for gpu_id, (n_train, n_epochs) in zip(gpu_ids, cfgs):
+for gpu_id, (i, cfg) in zip(gpu_ids, enumerate(cfgs)):
     command = base_command.format(
         gpu_id=gpu_id,
-        n_train=n_train,  # NOTE
-        n_epochs=n_epochs,  # NOTE
-        seed=1000,  # NOTE
         weak_ds_path=weak_ds_path,
         oracle_ds_path=oracle_ds_path,
         test_ds_path=test_ds_path,
+        seed=i + 1,
+        reporter_stages=len(cfg),
+        run_name="am_title_debug_" + str(i),
     )
-    print(f"Running command: {command}")  # Debug print
+    for j, stage in enumerate(cfg):
+        prefix = f"stage{j}_"
+        for key, value in stage.items():
+            if value is True:
+                command += f"--{prefix}{key} "
+            else:
+                command += f"--{prefix}{key} {value} "
+
+    print(f"Running command: {command}")  # python  Debug print
     p = Process(target=run_command, args=(command,))
     p.start()
     processes.append(p)

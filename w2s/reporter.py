@@ -1,21 +1,25 @@
+from __future__ import annotations
+
 import random
 from abc import ABC
 from pathlib import Path
+from typing import Literal, Optional
 
 import numpy as np
 import pandas as pd
 import torch
 from datasets import Dataset, DatasetDict, concatenate_datasets
+from peft.tuners.lora.layer import LoraLayer
 from torch import nn, optim
 from transformers import DataCollatorWithPadding, Trainer, TrainingArguments
 
 from w2s.metrics import roc_auc
 from w2s.model import Predictor, TransformerPredictor
 from w2s.sft import lm_sft, prepare_for_trainer
+from w2s.sft_utils import get_gpu_mem_used
 from w2s.utils import (
     assert_type,
     ds_with_labels,
-    split_args_by_prefix,
     uncertainty_sample,
 )
 
@@ -31,7 +35,7 @@ class Oracle:
         assert "gt_soft_label" not in gt_dataset.column_names
 
         self._df = gt_dataset.to_pandas()  # type: ignore
-        self._df.set_index("id", inplace=True)
+        self._df.set_index("id", inplace=True, drop=False)
         if "labels" in self._df.columns:
             self._df.drop(columns=["labels"], inplace=True)
         self.input_col = input_col
@@ -118,115 +122,166 @@ class Reporter(ABC):
         ...
 
 
-class SftReporter(Reporter):
+class SftStageConfig:
+    modules_with_grad: Literal["all", "head", "body"] = "all"
+    reinit_head: bool = False
+    train_args: dict
+    type: Literal["weak", "oracle"] = "weak"
+    size: int = 1000
+    sampling: Literal[
+        "random", "most_confident_label", "least_confident_pred"
+    ] = "random"
+    n_test: int = 0
+
+    def __init__(
+        self,
+        type: Literal["weak", "oracle"] = "weak",
+        size: int = 1000,
+        sampling: Literal[
+            "random", "most_confident_label", "least_confident_pred"
+        ] = "random",
+        n_test: int = 0,
+        modules_with_grad: Literal["all", "head", "body"] = "all",
+        reinit_head: bool = False,
+        **kwargs,
+    ):
+        self.type = type
+        self.size = size
+        self.sampling = sampling
+        self.n_test = n_test
+        self.modules_with_grad = modules_with_grad
+        self.reinit_head = reinit_head
+        self.train_args = kwargs
+
+    def get_dataset(
+        self, oracle: Oracle, weak_ds: Dataset, test_ds: Dataset, reporter: Reporter
+    ) -> Dataset:
+        inputs = oracle.get_inputs() if self.type == "oracle" else weak_ds
+        label_col = "soft_pred" if self.type == "weak" else "soft_label"
+
+        if self.sampling == "random":
+            idxs = random.sample(range(len(inputs)), self.size)
+        elif self.sampling == "least_confident_pred":
+            print("Selecting examples with highest reporter entropy for training.")
+            pred_logodds = reporter(inputs["txt"])
+            probs = torch.nn.functional.sigmoid(pred_logodds)
+            probs = torch.stack([1 - probs, probs], dim=-1)
+
+            idxs = uncertainty_sample(probs, self.size, "sample", most_confident=False)
+        elif self.sampling == "most_confident_label":
+            print("Selecting examples with lowest label entropy for training.")
+            probs = torch.softmax(torch.as_tensor(inputs[label_col]), dim=-1)
+            idxs = uncertainty_sample(probs, self.size, "sample", most_confident=True)
+        else:
+            raise ValueError(f"Unknown sampling method: {self.sampling}")
+
+        if self.type == "oracle":
+            ids = np.array(inputs["id"])[idxs].tolist()
+            train_ds = Dataset.from_pandas(oracle.query_ids(ids), preserve_index=False)
+        else:
+            train_ds = weak_ds.select(idxs)
+
+        ds_dict = {"train": ds_with_labels(train_ds, labels_column=label_col)}
+        if self.n_test > 0:
+            ds_dict["test"] = ds_with_labels(
+                test_ds.shuffle().select(range(self.n_test)), labels_column="soft_label"
+            )
+        return DatasetDict(**ds_dict)
+
+    def run(
+        self, reporter: Reporter, optimizer_checkpoint: Optional[str] = None
+    ) -> str:
+        assert isinstance(reporter.strong_model, TransformerPredictor)
+        if reporter.strong_model.cfg.enable_lora:
+            # TODO: support models without `score` attribute
+            lora_params = [
+                (*list(m.lora_A.parameters()), *list(m.lora_B.parameters()))
+                for m in reporter.strong_model.transformer.modules()
+                if isinstance(m, LoraLayer)
+            ]
+            lora_params = [p for params in lora_params for p in params]
+            if self.modules_with_grad == "all":
+                for p in lora_params:
+                    p.requires_grad_()
+                reporter.strong_model.transformer.score.requires_grad_()
+            elif self.modules_with_grad == "head":
+                reporter.strong_model.transformer.requires_grad_(False)
+                reporter.strong_model.transformer.score.requires_grad_()
+            elif self.modules_with_grad == "body":
+                for p in lora_params:
+                    if p.dtype not in {
+                        torch.bfloat16,
+                        torch.float16,
+                        torch.float32,
+                        torch.float64,
+                    }:
+                        print(f"Skipping parameter {p} with dtype {p.dtype}")
+                    p.requires_grad_()
+                reporter.strong_model.transformer.score.requires_grad_(False)
+            else:
+                raise ValueError(f"Unknown modules_with_grad: {self.modules_with_grad}")
+        else:
+            raise ValueError("Only Lora models are supported")
+
+        if self.reinit_head:
+            score_data = reporter.strong_model.transformer.score.weight.data
+            score_data.normal_(0, 0.01 / score_data.shape[-1] ** 0.5)
+
+        ds_dict = self.get_dataset(
+            reporter.oracle, reporter.weak_ds, reporter.test_ds, reporter
+        )
+        train_args = self.train_args.copy()
+
+        print(f"{get_gpu_mem_used()} before training")
+
+        lm_sft(
+            ds_dict=ds_dict,
+            model=reporter.strong_model.transformer,
+            tokenizer=reporter.strong_model.tokenizer,
+            train_args=TrainingArguments(**train_args),
+            loss="xent",
+            store_pre_hiddens=False,
+            store_post_hiddens=False,
+            cfg=reporter.to_dict(),
+            predict_dict=None,
+            resume_from_checkpoint=optimizer_checkpoint,
+        )
+
+        return f"{train_args['output_dir']}/best-ckpt/optimizer.pt"
+
+    def to_dict(self) -> dict:
+        return vars(self)
+
+
+class ModularSftReporter(Reporter):
     strong_model: TransformerPredictor  # override type
 
     def __init__(
         self,
         weak_ds: Dataset,
         oracle: Oracle,
-        test_ds: Dataset,
+        test_ds: Dataset,  # for logging
+        stage_configs: list[SftStageConfig],
         strong_model: TransformerPredictor,
         input_col: str = "txt",
-        save_dir: str = "./results",
-        **kwargs,
     ):
         super().__init__(weak_ds, oracle, test_ds, strong_model, input_col)
+        self.stage_configs = stage_configs
         self.test_ds = ds_with_labels(test_ds)
-        split_args = split_args_by_prefix(kwargs, ("w2s_", "oracle_"))
-        for split in split_args:
-            split_args[split][
-                "run_name"
-            ] = f"{split}{split_args[split].get('run_name', 'default')}"
-            split_args[split]["output_dir"] = str(Path(save_dir) / split[:-1])
-
-        self.weak_train_args = split_args["w2s_"]
-        self.oracle_train_args = split_args["oracle_"]
 
         assert input_col == "txt", "Only LM SFT is supported"
 
-    def fit(self, max_queries: int) -> "SftReporter":
-        weak_ds_dict = DatasetDict(
-            train=ds_with_labels(self.weak_ds, labels_column="soft_pred"),
-            test=self.test_ds,
-        )
-        lm_sft(
-            ds_dict=weak_ds_dict,
-            model=self.strong_model.transformer,
-            tokenizer=self.strong_model.tokenizer,
-            train_args=TrainingArguments(**self.weak_train_args),
-            loss="xent",
-            store_pre_hiddens=False,
-            store_post_hiddens=False,
-            cfg=self.to_dict(),
-            predict_dict=None,
-        )
-
-        if max_queries > 0:
-            # then train on oracle
-            oracle_ds = self.get_oracle_ds(max_queries)
-
-            print(
-                f"\n\033[32m===== {len(oracle_ds)} oracle queries finetuning =====\033[0m"
-            )
-            oracle_ds = ds_with_labels(oracle_ds)
-            # add num_queries to the run name and output dir
-            # the previous results will be cached, but these will not
-            ota = self.oracle_train_args.copy()
-            ota["run_name"] += f"_{max_queries}queries"
-            ota["output_dir"] = f"{ota['output_dir']}_{max_queries}queries"
-            min_use_test = 200
-            ota["eval_strategy"] = "no" if max_queries < min_use_test else "steps"
-            mult = 4
-            ota["num_train_epochs"] = {
-                1: 32 * mult,
-                2: 32 * mult,
-                4: 32 * mult,
-                8: 32 * mult,
-                16: 32 * mult,
-                32: 32 * mult,
-                64: 32 * mult,
-                128: 16 * mult,
-                256: 8 * mult,
-                512: 4 * mult,
-                1024: 2 * mult,
-                2048: 1 * mult,
-                4096: max(int(0.5 * mult), 1),
-                8192: max(int(0.25 * mult), 1),
-                16384: max(int(0.125 * mult), 1),
-            }[max_queries]
-            if max_queries < min_use_test:
-                oracle_dict = DatasetDict(train=oracle_ds)
-            else:
-                oracle_dict = DatasetDict(
-                    train=oracle_ds, test=self.test_ds  # type: ignore
-                )
-            lm_sft(
-                ds_dict=oracle_dict,
-                model=self.strong_model.transformer,
-                tokenizer=self.strong_model.tokenizer,
-                train_args=TrainingArguments(**ota),
-                loss="xent",
-                store_pre_hiddens=False,
-                store_post_hiddens=False,
-                cfg=self.to_dict(),
-                predict_dict=None,
-                resume_from_checkpoint=f"{self.weak_train_args['output_dir']}/best-ckpt/optimizer.pt",
-            )
+    def fit(self) -> ModularSftReporter:
+        for i, stage_config in enumerate(self.stage_configs):
+            print(f"\n\033[32m [Stage {i}] \033[0m")
+            stage_config.run(self)
 
         return self
-
-    def get_oracle_ds(self, max_queries: int) -> Dataset:
-        random_oracle_ids = random.sample(
-            self.oracle.get_inputs().index.values.tolist(), max_queries
-        )
-        return Dataset.from_pandas(self.oracle.query_ids(random_oracle_ids))
 
     def to_dict(self) -> dict:
         return {
             "method": self.__class__.__name__,
-            "weak_train_args": self.weak_train_args,
-            "oracle_train_args": self.oracle_train_args,
+            "stage_configs": [s.to_dict() for s in self.stage_configs],
             "model": self.strong_model.to_dict(),
         }
 
@@ -238,7 +293,7 @@ class SftReporter(Reporter):
             Dataset.from_dict({self.input_col: inputs}), self.strong_model.tokenizer
         )
         # turn off wandb logging in trainer
-        targs = self.weak_train_args.copy()
+        targs = self.stage_configs[0].train_args.copy()
         targs["report_to"] = "none"
         targs["output_dir"] = "tmp"
         targs["run_name"] = "tmp"
@@ -252,27 +307,6 @@ class SftReporter(Reporter):
         )
         pred_logits = torch.from_numpy(trainer.predict(predict_ds).predictions)  # type: ignore # noqa
         return pred_logits.diff(dim=-1).squeeze()
-
-
-class ActiveSftReporter(SftReporter):
-    strong_model: TransformerPredictor  # override type
-
-    def get_oracle_ds(self, max_queries: int) -> Dataset:
-        # get reporter predictions on all data, and pick the `max_queries` most uncertain
-        all_oracle_inputs = Dataset.from_pandas(self.oracle.get_inputs())
-
-        print("Selecting examples with highest entropy for training.")
-
-        pred_logodds = self(all_oracle_inputs["txt"])
-        probs = torch.nn.functional.sigmoid(pred_logodds)
-        probs = torch.stack([1 - probs, probs], dim=-1)
-
-        uncertain_idxs = uncertainty_sample(
-            probs, max_queries, "sample", most_confident=False
-        )
-        oracle_ids = np.array(all_oracle_inputs["id"])[uncertain_idxs].tolist()
-        np.random.shuffle(oracle_ids)
-        return Dataset.from_pandas(self.oracle.query_ids(oracle_ids))
 
 
 class DivDisSftReporter(Reporter):
@@ -317,7 +351,7 @@ class DivDisSftReporter(Reporter):
         # with -1 examples separately
         weak_ds = ds_with_labels(self.weak_ds, labels_column="soft_pred")
         train_target_ds = (
-            Dataset.from_pandas(self.oracle.get_inputs())
+            Dataset.from_pandas(self.oracle.get_inputs(), preserve_index=False)
             .shuffle()
             .select(range(len(weak_ds)))  # NOTE: this is a hyperparameter
         )
@@ -342,6 +376,7 @@ class DivDisSftReporter(Reporter):
         # then disambiguate
         if max_queries > 0:
             oracle_ds = ds_with_labels(self.get_oracle_ds(max_queries))
+            breakpoint()
             self._disambiguate(oracle_ds)
             self._platt_scale(oracle_ds)
         else:
@@ -355,7 +390,9 @@ class DivDisSftReporter(Reporter):
         # but we would prefer to also care about the confidence of disagreements
         # so we use the total cross entropy between every pair of heads
 
-        all_oracle_inputs = Dataset.from_pandas(self.oracle.get_inputs())
+        all_oracle_inputs = Dataset.from_pandas(
+            self.oracle.get_inputs(), preserve_index=False
+        )
 
         print(
             "Selecting examples with average cross entropy between pairs of heads for training."
@@ -374,7 +411,9 @@ class DivDisSftReporter(Reporter):
         uncertain_idxs = torch.multinomial(avg_xents, max_queries, replacement=False)
 
         oracle_ids = np.array(all_oracle_inputs["id"])[uncertain_idxs].tolist()
-        return Dataset.from_pandas(self.oracle.query_ids(oracle_ids)).shuffle()
+        return Dataset.from_pandas(
+            self.oracle.query_ids(oracle_ids), preserve_index=False
+        ).shuffle()
 
     def _disambiguate(self, oracle_ds: Dataset) -> int:
         # get predictions from all heads
