@@ -198,5 +198,4 @@ def run_train(cfg: SFTConfig):
         prev = f"s2s-{s2s_iter}"
 
 if __name__ == "__main__":
-    os.environ["HF_DATASETS_CACHE"] = "/home/adam/hf_cache"
     run_train(parse(SFTConfig))
