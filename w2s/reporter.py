@@ -132,6 +132,7 @@ class SftStageConfig:
         "random", "most_confident_label", "least_confident_pred"
     ] = "random"
     n_test: int = 0
+    weak_ids_used: set = set()
 
     def __init__(
         self,
@@ -188,6 +189,7 @@ class SftStageConfig:
             train_ds = Dataset.from_pandas(oracle.query_ids(ids), preserve_index=False)
         else:
             train_ds = weak_ds.select(idxs)
+            self.weak_ids_used.update(train_ds["id"])
 
         ds_dict = {"train": ds_with_labels(train_ds, labels_column=label_col)}
         if self.n_test > 0:

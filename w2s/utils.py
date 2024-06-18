@@ -88,6 +88,6 @@ def uncertainty_sample(
     )
 
     # get n_train random indices with replacement, weighted by p_correct
-    idxs = torch.multinomial(weights, n, replacement=False)
+    idxs = torch.multinomial(weights, n, replacement=True)
     idxs = idxs[torch.randperm(len(idxs))]
     return idxs

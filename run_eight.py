@@ -2,18 +2,17 @@ import subprocess
 from multiprocessing import Process
 
 # Define the datasets and respective GPU ids
-gpu_ids = [3, 4, 5, 6, 7]  # NOTE
+gpu_ids = [0, 1]  # NOTE
 weak_labels_dir = "amazon_polarity_title_only"  # NOTE
-temp = 0.25
 cfgs = [
-    # CFG 1: LP(GT), FT(weak) frozen head, FT(oracle) reinit head
+    # CFG 1: LP(weak), FT(GT), FT(weak) with new head, FT(GT)
     [
         {
             "modules_with_grad": "head",
             "type": "weak",
             "size": 1024,
             "sampling": "most_confident_label",
-            "sample_temp": temp,
+            "sample_temp": 0.1,
             "num_train_epochs": 3,
             "n_test": 500,
         },
@@ -22,7 +21,7 @@ cfgs = [
             "type": "oracle",
             "size": 32,
             "sampling": "least_confident_pred",
-            "sample_temp": temp,
+            "sample_temp": 0.1,
             "num_train_epochs": 100,
             "n_test": 500,
         },
@@ -32,7 +31,7 @@ cfgs = [
             "type": "weak",
             "size": 1024,
             "sampling": "most_confident_label",
-            "sample_temp": temp,
+            "sample_temp": 0.1,
             "num_train_epochs": 1,
             "n_test": 500,
         },
@@ -41,99 +40,29 @@ cfgs = [
             "type": "oracle",
             "size": 32,
             "sampling": "least_confident_pred",
-            "sample_temp": temp,
+            "sample_temp": 0.1,
             "num_train_epochs": 50,
             "n_test": 500,
         },
     ],
-    # CFG 2: LP(weak), FT(weak) frozen head, FT(oracle)
+    # CFG 1: LP(weak), FT(GT), FT(weak) with new head, FT(GT)
     [
         {
             "modules_with_grad": "head",
             "type": "weak",
-            "size": 32,
+            "size": 1024,
             "sampling": "most_confident_label",
-            "sample_temp": temp,
-            "weight_decay": 1.0,
+            "sample_temp": 0.5,
+            "num_train_epochs": 3,
+            "n_test": 500,
+        },
+        {
+            "modules_with_grad": "all",
+            "type": "oracle",
+            "size": 32,
+            "sampling": "least_confident_pred",
+            "sample_temp": 0.5,
             "num_train_epochs": 100,
-            "n_test": 500,
-        },
-        {
-            "modules_with_grad": "body",
-            "type": "weak",
-            "size": 128,
-            "sampling": "most_confident_label",
-            "sample_temp": temp,
-            "num_train_epochs": 16,
-            "n_test": 500,
-        },
-        {
-            "modules_with_grad": "all",
-            "reinit_head": False,
-            "type": "oracle",
-            "size": 64,
-            "sampling": "least_confident_pred",
-            "sample_temp": temp,
-            "num_train_epochs": 16,
-        },
-    ],
-    # CFG 3: LP with weak, FT with gt, FT with weak, FT with gt
-    [
-        {
-            "modules_with_grad": "head",
-            "type": "weak",
-            "size": 1024,
-            "sampling": "most_confident_label",
-            "sample_temp": temp,
-            "num_train_epochs": 3,
-            "n_test": 500,
-        },
-        {
-            "modules_with_grad": "all",
-            "type": "oracle",
-            "size": 32,
-            "sampling": "least_confident_pred",
-            "sample_temp": temp,
-            "num_train_epochs": 50,
-            "n_test": 500,
-        },
-        {
-            "modules_with_grad": "all",
-            "type": "weak",
-            "size": 64,
-            "sampling": "most_confident_label",
-            "sample_temp": temp,
-            "num_train_epochs": 50,
-            "n_test": 500,
-        },
-        {
-            "modules_with_grad": "all",
-            "type": "oracle",
-            "size": 32,
-            "sampling": "least_confident_pred",
-            "sample_temp": temp,
-            "num_train_epochs": 50,
-            "n_test": 500,
-        },
-    ],
-    # CFG 4: LP with weak, FT with gt, FT with weak with random head, FT with gt again but body, then ft with gt  # noqa
-    [
-        {
-            "modules_with_grad": "head",
-            "type": "weak",
-            "size": 1024,
-            "sampling": "most_confident_label",
-            "sample_temp": temp,
-            "num_train_epochs": 3,
-            "n_test": 500,
-        },
-        {
-            "modules_with_grad": "all",
-            "type": "oracle",
-            "size": 64,
-            "sampling": "least_confident_pred",
-            "sample_temp": temp,
-            "num_train_epochs": 20,
             "n_test": 500,
         },
         {
@@ -142,79 +71,20 @@ cfgs = [
             "type": "weak",
             "size": 1024,
             "sampling": "most_confident_label",
-            "sample_temp": temp,
+            "sample_temp": 0.5,
             "num_train_epochs": 1,
             "n_test": 500,
         },
         {
-            "modules_with_grad": "body",
-            "type": "oracle",
-            "size": 32,
-            "sampling": "least_confident_pred",
-            "sample_temp": temp,
-            "num_train_epochs": 50,
-            "n_test": 500,
-        },
-        {
             "modules_with_grad": "all",
             "type": "oracle",
             "size": 32,
             "sampling": "least_confident_pred",
-            "sample_temp": temp,
+            "sample_temp": 0.5,
             "num_train_epochs": 50,
             "n_test": 500,
         },
     ],
-    # New
-    [
-        {
-            "modules_with_grad": "head",
-            "type": "weak",
-            "size": 1024,
-            "sampling": "most_confident_label",
-            "sample_temp": temp,
-            "num_train_epochs": 3,
-            "n_test": 500,
-        },
-        {
-            "modules_with_grad": "all",
-            "type": "oracle",
-            "size": 32,
-            "sampling": "least_confident_pred",
-            "sample_temp": temp,
-            "num_train_epochs": 100,
-            "n_test": 500,
-        },
-        {
-            "modules_with_grad": "all",
-            "reinit_head": True,
-            "type": "weak",
-            "size": 128,
-            "sampling": "most_confident_label",
-            "sample_temp": temp,
-            "num_train_epochs": 8,
-            "n_test": 500,
-        },
-        {
-            "modules_with_grad": "body",
-            "type": "oracle",
-            "size": 32,
-            "sampling": "least_confident_pred",
-            "sample_temp": temp,
-            "num_train_epochs": 50,
-            "n_test": 500,
-        },
-        {
-            "modules_with_grad": "all",
-            "type": "oracle",
-            "size": 32,
-            "sampling": "least_confident_pred",
-            "sample_temp": temp,
-            "num_train_epochs": 50,
-            "n_test": 500,
-        },
-    ],
-    # TODO: add more
 ]
 base_command = (
     "CUDA_VISIBLE_DEVICES={gpu_id} "
@@ -250,14 +120,15 @@ processes = []
 
 # Loop over datasets and gpu_ids
 for gpu_id, (i, cfg) in zip(gpu_ids, enumerate(cfgs)):
+    seed_offset = 1
     command = base_command.format(
         gpu_id=gpu_id,
         weak_ds_path=weak_ds_path,
         oracle_ds_path=oracle_ds_path,
         test_ds_path=test_ds_path,
-        seed=i + 3,
+        seed=i + seed_offset,
         reporter_stages=len(cfg),
-        run_name=f"am_title_temp{temp}_s3_" + str(i),
+        run_name=f"am_title_temp_sweep_s{seed_offset}_" + str(i),
     )
     for j, stage in enumerate(cfg):
         prefix = f"stage{j}_"

@@ -74,11 +74,10 @@ def train_reporter_on_transformer(
         "oracle_ds_path": str(oracle_ds_path),
         "test_ds_path": str(test_ds_path),
         "n_test": n_test,
-        "weak_pool_size": len(weak_ds),
+        "weak_pool_size": weak_pool_size,
         "oracle_pool_size": len(oracle_ds),
     }
     weak_ds = weak_ds.shuffle().select(range(weak_pool_size))
-    dataset_cfg_dict["weak_uncertainty_sample"] = "random"
 
     assert num_heads == 1
     mcfg = ModelConfig(

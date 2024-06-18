@@ -91,7 +91,7 @@ def train_and_eval_reporter(
         "acc": float(acc_result.estimate),
         "acc_lo": float(acc_result.lower),
         "acc_hi": float(acc_result.upper),
-        "num_weak": len(weak_ds),
+        "num_weak": len(set.union(*(s.weak_ids_used for s in reporter.stages))),
         "num_oracle": len(
             reporter.oracle.ids_labeled
         ),  # could be diff from num_queries
