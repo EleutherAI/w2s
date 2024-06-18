@@ -82,11 +82,9 @@ def uncertainty_sample(
     entropies = -(probs * torch.log2(probs)).sum(dim=-1)
 
     weights = 1 - entropies if most_confident else entropies
-    log_weights = torch.log(weights)
+    weights /= weights.sum()
     weights = (
-        torch.exp(log_weights / temperature)
-        if temperature != 0
-        else torch.ones_like(weights)
+        weights**1 / temperature if temperature != 0 else torch.ones_like(weights)
     )
 
     # get n_train random indices with replacement, weighted by p_correct
