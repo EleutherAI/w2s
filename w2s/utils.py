@@ -1,4 +1,4 @@
-from typing import Any, Literal, Type, TypeVar, cast
+from typing import Any, Type, TypeVar, cast
 
 import torch
 from datasets import Dataset
@@ -73,26 +73,23 @@ def ds_with_labels(ds: Dataset, labels_column: str = "soft_label"):
 def uncertainty_sample(
     probs,
     n,
-    method: Literal["sample", "hard"],
+    temperature: float = 1.0,
     most_confident=False,
     eps=1e-8,
 ):
     assert probs.ndim == 2
     probs = torch.clamp(probs, eps, 1 - eps)
     entropies = -(probs * torch.log2(probs)).sum(dim=-1)
-    if method == "hard":
-        idxs = (1 - entropies if most_confident else entropies).argsort()[:n][
-            torch.randperm(n)
-        ]
-    elif method == "sample":
-        # hard uncertainty sampling sucks. We want to sample with a bias
-        # towards confidently labeled examples. We can do this by sampling with weight 1 - entropy
 
-        # get n_train random indices with replacement, weighted by p_correct
-        idxs = torch.multinomial(
-            1 - entropies if most_confident else entropies, n, replacement=False
-        )
-    else:
-        raise ValueError(f"Invalid method: {method}")
+    weights = 1 - entropies if most_confident else entropies
+    log_weights = torch.log(weights)
+    weights = (
+        torch.exp(log_weights / temperature)
+        if temperature != 0
+        else torch.ones_like(weights)
+    )
+
+    # get n_train random indices with replacement, weighted by p_correct
+    idxs = torch.multinomial(weights, n, replacement=False)
     idxs = idxs[torch.randperm(len(idxs))]
     return idxs

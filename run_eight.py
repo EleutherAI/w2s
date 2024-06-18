@@ -209,9 +209,9 @@ for gpu_id, (i, cfg) in zip(gpu_ids, enumerate(cfgs)):
         weak_ds_path=weak_ds_path,
         oracle_ds_path=oracle_ds_path,
         test_ds_path=test_ds_path,
-        seed=i + 1,
+        seed=i + 2,
         reporter_stages=len(cfg),
-        run_name="am_title_debug_" + str(i),
+        run_name="am_title_temp0.25_s2_" + str(i),
     )
     for j, stage in enumerate(cfg):
         prefix = f"stage{j}_"

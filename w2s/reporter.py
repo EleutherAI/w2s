@@ -143,6 +143,8 @@ class SftStageConfig:
         n_test: int = 0,
         modules_with_grad: Literal["all", "head", "body"] = "all",
         reinit_head: bool = False,
+        sample_temp: float = 0.25,
+        reuse_optimizer_checkpoint: bool = False,
         **kwargs,
     ):
         self.type = type
@@ -151,6 +153,8 @@ class SftStageConfig:
         self.n_test = n_test
         self.modules_with_grad = modules_with_grad
         self.reinit_head = reinit_head
+        self.sample_temp = sample_temp
+        self.reuse_optimizer_checkpoint = bool(reuse_optimizer_checkpoint)
         self.train_args = kwargs
 
     def get_dataset(
@@ -167,11 +171,15 @@ class SftStageConfig:
             probs = torch.nn.functional.sigmoid(pred_logodds)
             probs = torch.stack([1 - probs, probs], dim=-1)
 
-            idxs = uncertainty_sample(probs, self.size, "sample", most_confident=False)
+            idxs = uncertainty_sample(
+                probs, self.size, self.sample_temp, most_confident=False
+            )
         elif self.sampling == "most_confident_label":
             print("Selecting examples with lowest label entropy for training.")
             probs = torch.softmax(torch.as_tensor(inputs[label_col]), dim=-1)
-            idxs = uncertainty_sample(probs, self.size, "sample", most_confident=True)
+            idxs = uncertainty_sample(
+                probs, self.size, self.sample_temp, most_confident=True
+            )
         else:
             raise ValueError(f"Unknown sampling method: {self.sampling}")
 
@@ -244,7 +252,9 @@ class SftStageConfig:
             store_post_hiddens=False,
             cfg=reporter.to_dict(),
             predict_dict=None,
-            resume_from_checkpoint=optimizer_checkpoint,
+            resume_from_checkpoint=optimizer_checkpoint
+            if self.reuse_optimizer_checkpoint
+            else None,
         )
 
         return f"{train_args['output_dir']}/best-ckpt/optimizer.pt"
@@ -272,9 +282,10 @@ class ModularSftReporter(Reporter):
         assert input_col == "txt", "Only LM SFT is supported"
 
     def fit(self) -> ModularSftReporter:
+        optimizer_checkpoint = None
         for i, stage_config in enumerate(self.stage_configs):
             print(f"\n\033[32m [Stage {i}] \033[0m")
-            stage_config.run(self)
+            optimizer_checkpoint = stage_config.run(self, optimizer_checkpoint)
 
         return self
 
