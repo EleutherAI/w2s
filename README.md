@@ -40,7 +40,7 @@ Strong student results are stored in `./results/[run_name]/[dataset]/`. (You can
 
 Basic metrics, like test AUC and accuracy, are in `w2s/results.json`. `wandb` is used for detailed logging if available.
 
-Floor and ceiling results, weak supervisor predictions, and activations are stored in a shared folder so that they can be reused across experiments. By default this is `./results/shared/`, but it is configurable with `--shared_folder`.
+Floor and ceiling results, weak supervisor predictions, and activations are stored in a shared folder so that they can be reused across experiments. By default this is `./results/[shared_folder]/[dataset]/`; the default `--shared_folder` is `shared`. You should change this if you change the weak or strong model, or anything else about the weak model training setup.
 
 ## Troubleshooting
 
