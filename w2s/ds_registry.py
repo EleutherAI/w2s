@@ -715,21 +715,21 @@ def format_underspecified_amazon_polarity(ex, rng, use_gt=True):
     return dict(txt=txt, hard_label=label)
 
 
-register_dataset(
-    "amazon_polarity_gt",
-    DatasetConfig(
-        loader=hf_loader("amazon_polarity"),  # type: ignore
-        formatter=functools.partial(format_underspecified_amazon_polarity, use_gt=True),  # type: ignore  # noqa
-    ),
-)
+# register_dataset(
+#     "amazon_polarity_gt",
+#     DatasetConfig(
+#         loader=hf_loader("amazon_polarity"),  # type: ignore
+#         formatter=functools.partial(format_underspecified_amazon_polarity, use_gt=True),  # type: ignore  # noqa
+#     ),
+# )
 
-register_dataset(
-    "amazon_polarity_weak",
-    DatasetConfig(
-        loader=hf_loader("amazon_polarity"),  # type: ignore
-        formatter=functools.partial(format_underspecified_amazon_polarity, use_gt=False),  # type: ignore  # noqa
-    ),
-)
+# register_dataset(
+#     "amazon_polarity_weak",
+#     DatasetConfig(
+#         loader=hf_loader("amazon_polarity"),  # type: ignore
+#         formatter=functools.partial(format_underspecified_amazon_polarity, use_gt=False),  # type: ignore  # noqa
+#     ),
+# )
 
 
 VALID_DATASETS: list[str] = list(_REGISTRY.keys())

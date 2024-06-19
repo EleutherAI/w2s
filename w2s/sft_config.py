@@ -22,8 +22,9 @@ class SFTConfig(Serializable):
     # when "train", it uses the training set to generate predictions
     # otherwise it uses n_predict held out examples
     n_predict: Union[literal("train"), int] = 0
-    minibatch_size: int = 8
-    # examples per update
+    # examples per minibatch (small to fit in memory for long sequences)
+    minibatch_size: int = 1
+    # examples per update (gradient accumulated across minibatches)
     batch_size: int = 32
     results_folder: str = "./results"
     run_name: str = "default"
@@ -31,8 +32,8 @@ class SFTConfig(Serializable):
     disable_lora: bool = False
     lr_schedule: str = "cosine"
     n_warmup_steps: int = 40  # 2 / (1 - 0.95) = 40
-    eval_every: int = 100  # steps
-    save_every: int = 100  # steps
+    eval_every: int = 25  # steps
+    save_every: int = 25  # steps
     save_total_limit: Optional[int] = 1
     weight_decay: float = 0.1
     weak_lr: float = 5e-4
