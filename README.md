@@ -34,6 +34,8 @@ There is `--help` available via `simpleparsing`. For individual loss functions a
 
 Defaults are set in `sft_config.py`, `probe.py`, and `loss.py`. 
 
+LoRA is on by default (rank 8). Pass `--disable_lora` to switch it off, although this is somewhat untested. For architectures other than Llama, Mistral, and Qwen, you will need to set `ModelConfig.lora_modules` in the arguments to `w2s.sft.train()`.
+
 ## Output and shared folders
 
 Strong student results are stored in `./results/[run_name]/[dataset]/`. (You can set a different `--run_name` per experiment so that they don't overwrite each other.)
