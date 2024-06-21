@@ -1,6 +1,6 @@
 import hashlib
 from pathlib import Path
-from typing import Union
+from typing import Union, Literal
 
 from datasets import Dataset, DatasetDict, concatenate_datasets, load_from_disk
 from fire import Fire
@@ -24,8 +24,9 @@ def add_idx_col(ds: Union[DatasetDict, Dataset]) -> Union[DatasetDict, Dataset]:
 
 
 def main(
-    model_name: str = "Qwen/Qwen1.5-0.5B",
-    n_train: int = 2_000,
+    prompt: Literal["weak_amplified", "both_amplified", "neither_amplified", "gt_amplified"],
+    model_name: str = "meta-llama/Meta-Llama-3-8B",
+    n_train: int = 8_000,
     n_val: int = 500,
     n_test: int = 5_000,
     n_predict: int = 50_000,
@@ -40,7 +41,7 @@ def main(
 
     if results_folder is None:
         results_folder = str(
-            Path(__file__).parent / "results/ethics_deontology_excuse_only"
+            Path(__file__).parent / f"results/ethics_deontology_excuse_only_{prompt}"
         )
 
     # load dataset
@@ -51,8 +52,8 @@ def main(
     if remove_mislabeled_model:
         # train strong with good prompt, then remove examples where it disagrees with the "gt" label
         print("\n\033[32m===== Training strong model =====\033[0m")
-        mc = ModelConfig(remove_mislabeled_model, not disable_lora)
-        model = TransformerPredictor(mc)
+        mc = ModelConfig(remove_mislabeled_model, not disable_lora, TransformerPredictor)
+        model = mc.initialize_model()
         denoise_args = train_args.copy()
         denoise_args["output_dir"] = Path(results_folder) / "remove_mislabeled"
         denoise_args["learning_rate"] = MODEL_REGISTRY[remove_mislabeled_model]["lr"]
@@ -110,8 +111,8 @@ def main(
 
     # train weak floor, save predictions on train and test
     print(f"\n\033[32m===== Training {model_name} =====\033[0m")
-    mc = ModelConfig(model_name, not disable_lora)
-    model = TransformerPredictor(mc)
+    mc = ModelConfig(model_name, not disable_lora, TransformerPredictor)
+    model = mc.initialize_model()
     train_args["output_dir"] = results_folder
     train_args["learning_rate"] = MODEL_REGISTRY[model_name]["lr"]
     ds_dict = DatasetDict(
@@ -147,7 +148,12 @@ def main(
     test_ds = load_from_disk(str(predict_dir / "test"))
 
     def reformat(ex):
-        txt = f"...{ex['scenario']}:\n\nA: True\n\nQ2: Is \"{ex['excuse']}\" usually a morally acceptable excuse?\n\nA:"  # noqa
+        txt = {
+            "weak_amplified": f"...{ex['scenario']}:\n\nA: True\n\nQ2: Is \"{ex['excuse']}\" usually a morally acceptable excuse?\n\nA:",  # noqa
+            "both_amplified": f"Scenario: {ex['scenario']}\n\nExcuse: \"{ex['excuse']}\"\n\nIs this a morally acceptable excuse in this scenario? What about in a more usual scenario?",  # noqa
+            "neither_amplified": f"Scenario: {ex['scenario']}\n\nExcuse: \"{ex['excuse']}\"",
+            "gt_amplified": f"Scenario: {ex['scenario']}\n\nExcuse: \"{ex['excuse']}\"\n\nIs this a morally acceptable excuse in this scenario?",  # noqa
+        }[prompt]
         id = hashlib.sha1(txt.encode()).hexdigest()[:8]
         return {"txt": txt, "id": id}
 

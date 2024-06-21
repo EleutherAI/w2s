@@ -7,9 +7,9 @@ def set_default_args(args: dict, model_name: str, run_name: Optional[str] = None
     """Set default arguments for training a model."""
     # set defaults
     args["num_train_epochs"] = args.get("num_train_epochs", 1)
-    args["per_device_train_batch_size"] = args.get("per_device_train_batch_size", 8)
-    args["per_device_eval_batch_size"] = args.get("per_device_eval_batch_size", 32)
-    args["gradient_accumulation_steps"] = args.get("gradient_accumulation_steps", 4)
+    args["per_device_train_batch_size"] = args.get("per_device_train_batch_size", 1)
+    args["per_device_eval_batch_size"] = args.get("per_device_eval_batch_size", 3)
+    args["gradient_accumulation_steps"] = args.get("gradient_accumulation_steps", 32)
     args["warmup_steps"] = args.get("warmup_steps", 40)
     args["lr_scheduler_type"] = args.get("lr_scheduler_type", "cosine")
     args["weight_decay"] = args.get("weight_decay", 0.01)

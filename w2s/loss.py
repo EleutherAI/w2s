@@ -56,7 +56,7 @@ class CustomLossTrainer(Trainer):
         labels = inputs.pop("labels").float()
 
         outputs = model(**inputs)
-        if self.loss_name == "xent":
+        if self.loss_name in {"xent", "kl"}:
             aux_weight = 0
         elif self.loss_name == "logconf":
             aux_weight = 0.5
@@ -64,8 +64,9 @@ class CustomLossTrainer(Trainer):
             raise ValueError(f"Unknown loss: {self.loss_name}")
 
         loss = log_confidence_loss(
-            outputs.logits, labels, self.state.global_step, aux_coef=aux_weight
+            outputs.logits, labels, self.state.global_step, aux_coef=aux_weight, subtract_label_ent=self.loss_name == "kl"
         )
+            
 
         return (loss, outputs) if return_outputs else loss
 
@@ -176,6 +177,7 @@ def log_confidence_loss(
     step: int,
     warmup_steps: int = 200,
     aux_coef: float = 0.5,
+    subtract_label_ent: bool = False,
 ):
     logits = logits.float()
     labels = labels.float()
@@ -188,6 +190,10 @@ def log_confidence_loss(
         [(preds[:, 0] >= threshold)[:, None], (preds[:, 0] < threshold)[:, None]],
         dim=1,
     )
-    labels_binary = torch.stack([1.0 - labels, labels], dim=1)
-    target = labels_binary * (1 - coef) + strong_preds.detach() * coef
-    return torch.nn.functional.cross_entropy(logits, target)
+    labels_one_hot = torch.stack([1.0 - labels, labels], dim=1)
+    target = labels_one_hot * (1 - coef) + strong_preds.detach() * coef
+    loss = torch.nn.functional.cross_entropy(logits, target)
+    if subtract_label_ent:
+        avg_label_ent = -torch.sum(labels_one_hot * torch.log(labels_one_hot + 1e-10), dim=1).mean()
+        loss = loss - avg_label_ent
+    return loss
