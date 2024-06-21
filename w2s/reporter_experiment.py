@@ -52,7 +52,7 @@ def train_and_eval_reporter(
         oracle=Oracle(oracle_ds),
         test_ds=test_ds,
         strong_model=strong_model,
-        stage_configs=cfg.stages,
+        stages=cfg.stages,
         input_col=cfg.input_col,
     )
 

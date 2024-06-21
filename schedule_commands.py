@@ -1,16 +1,21 @@
+import argparse
 import subprocess
 import time
 
 import schedule
 
+parser = argparse.ArgumentParser()
+parser.add_argument("cmds_file", type=str)
+args = parser.parse_args()
+cmds_file = args.cmds_file
 # List of commands to execute
-commands = open("cmds.txt").read().strip().split("\n")
+commands = open(cmds_file).read().strip().split("\n")
 
 recently_used_gpus = dict()
 
 
 def check_gpu_memory():
-    for gpu_index, last_used_time in recently_used_gpus.items():
+    for gpu_index, last_used_time in list(recently_used_gpus.items()):
         if time.time() - last_used_time > 60 * 5:
             del recently_used_gpus[gpu_index]
     try:

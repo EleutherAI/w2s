@@ -122,7 +122,7 @@ class Reporter(ABC):
         ...
 
 
-class SftStageConfig:
+class SftStage:
     modules_with_grad: Literal["all", "head", "body"] = "all"
     reinit_head: bool = False
     train_args: dict
@@ -177,7 +177,9 @@ class SftStageConfig:
             )
         elif self.sampling == "most_confident_label":
             print("Selecting examples with lowest label entropy for training.")
-            probs = torch.softmax(torch.as_tensor(inputs[label_col]), dim=-1)
+            probs = torch.softmax(
+                torch.tensor(inputs[label_col], dtype=torch.float32), dim=-1
+            )
             idxs = uncertainty_sample(
                 probs, self.size, self.sample_temp, most_confident=True
             )
@@ -273,12 +275,12 @@ class ModularSftReporter(Reporter):
         weak_ds: Dataset,
         oracle: Oracle,
         test_ds: Dataset,  # for logging
-        stage_configs: list[SftStageConfig],
+        stages: list[SftStage],
         strong_model: TransformerPredictor,
         input_col: str = "txt",
     ):
         super().__init__(weak_ds, oracle, test_ds, strong_model, input_col)
-        self.stage_configs = stage_configs
+        self.stage_configs = stages
         self.test_ds = ds_with_labels(test_ds)
 
         assert input_col == "txt", "Only LM SFT is supported"

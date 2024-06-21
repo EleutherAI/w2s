@@ -8,7 +8,7 @@ import torch
 from datasets import Dataset, load_from_disk
 
 from w2s.model import ModelConfig, TransformerPredictor
-from w2s.reporter import SftStageConfig
+from w2s.reporter import SftStage
 from w2s.reporter_experiment import ExperimentConfig, train_and_eval_reporter
 from w2s.sft_config import set_default_args
 from w2s.utils import assert_type, split_args_by_prefix
@@ -55,9 +55,7 @@ def train_reporter_on_transformer(
             Path(reporter_args["output_dir"]) / stage[:-1]
         )
         stage_args[stage]["run_name"] = f"{run_name}-{stage[:-1]}"
-    stages = [
-        SftStageConfig(**stage_args[f"stage{i}_"]) for i in range(reporter_stages)
-    ]
+    stages = [SftStage(**stage_args[f"stage{i}_"]) for i in range(reporter_stages)]
 
     # load datasets
     weak_ds = assert_type(Dataset, load_from_disk(weak_ds_path))

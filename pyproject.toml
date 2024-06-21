@@ -24,6 +24,7 @@ dependencies = [
     "bitsandbytes~=0.43.1",
     "einops~=0.8.0",
     "wandb",
+    "schedule",
 ]
 version = "0.0.1"
 

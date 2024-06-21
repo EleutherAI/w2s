@@ -1,5 +1,4 @@
 import copy
-import subprocess
 
 # For amazon:
 # Use variations of cfg 0:
@@ -20,7 +19,7 @@ import subprocess
 # around 30 ft runs then
 
 # Define the datasets and respective GPU ids
-weak_labels_dir = "amazon_polarity_title_only"  # NOTE
+weak_labels_dir = "ethics_deontology_excuse_only"  # NOTE
 
 temp = 0.25
 # CFG 1: LP(weak), FT(GT), FT(weak) with new head, FT(GT)
@@ -72,7 +71,7 @@ base_command = (
     "{weak_ds_path} "
     "{oracle_ds_path} "
     "{test_ds_path} "
-    "40_000 40_000 2686 "
+    "9_000 9_000 2686 "
     "--seed {seed} "
     "--strong_model_name meta-llama/Meta-Llama-3-8B "
     "--reporter_stages {reporter_stages} "
@@ -87,57 +86,61 @@ base_command = (
     '--run_name "{run_name}" '
 )
 
-
-def run_command(command):
-    subprocess.run(command, shell=True, check=True)
-
-
 weak_ds_path = f"/mnt/ssd-1/alexm/w2s/results/{weak_labels_dir}/weak_train"
 oracle_ds_path = f"/mnt/ssd-1/alexm/w2s/results/{weak_labels_dir}/weak_train"
 test_ds_path = f"/mnt/ssd-1/alexm/w2s/results/{weak_labels_dir}/weak_test"
 
-processes = []
 
-# Loop over datasets and gpu_ids
-for stages in stages_list:
-    for oracle_cost in oracle_costs:
-        for budget in budgets:
-            if budget < 10 * oracle_cost:
-                continue
-            for spending_ratio in spending_ratios:
-                num_oracle = int(budget * spending_ratio // oracle_cost)
-                num_weak = (budget - num_oracle * oracle_cost) // weak_cost
-                if num_weak > 10_000 or num_oracle > 2000:
-                    continue
+def get_command(stages, oracle_cost, budget, spending_ratio):
+    num_oracle = int(budget * spending_ratio // oracle_cost)
+    num_weak = (budget - num_oracle * oracle_cost) // weak_cost
 
-                stages = copy.deepcopy(stages)
-                for stage in stages:
-                    total_points = stage["size"] * stage["num_train_epochs"]
-                    if stage["type"] == "weak":
-                        stage["size"] = num_weak
-                        stage["num_train_epochs"] = max(total_points // num_weak, 1)
-                    elif stage["type"] == "oracle":
-                        stage["size"] = num_oracle
-                        stage["num_train_epochs"] = max(total_points // num_oracle, 1)
+    if budget < 10 * oracle_cost:
+        return
+    if num_weak > 9_000 or num_oracle > 2000:
+        return
 
-                seed = 0
-                run_name = (
-                    f"oc={oracle_cost}_b={budget}_sr={spending_ratio}_cfg0_s{seed}"
-                )
-                command = base_command.format(
-                    weak_ds_path=weak_ds_path,
-                    oracle_ds_path=oracle_ds_path,
-                    test_ds_path=test_ds_path,
-                    seed=seed,
-                    reporter_stages=len(stages),
-                    run_name=run_name,
-                )
-                for j, stage in enumerate(stages):
-                    prefix = f"stage{j}_"
-                    for key, value in stage.items():
-                        if value is True:
-                            command += f"--{prefix}{key} "
-                        else:
-                            command += f"--{prefix}{key} {value} "
+    stages = copy.deepcopy(stages)
+    for stage in stages:
+        total_points = stage["size"] * stage["num_train_epochs"]
+        if stage["type"] == "weak":
+            stage["size"] = num_weak
+            stage["num_train_epochs"] = max(total_points // num_weak, 1)
+        elif stage["type"] == "oracle":
+            stage["size"] = num_oracle
+            stage["num_train_epochs"] = max(total_points // num_oracle, 1)
 
-                print(command)
+    seed = 0
+    run_name = f"oc={oracle_cost}_b={budget}_sr={spending_ratio}_cfg0_s{seed}"
+    command = base_command.format(
+        weak_ds_path=weak_ds_path,
+        oracle_ds_path=oracle_ds_path,
+        test_ds_path=test_ds_path,
+        seed=seed,
+        reporter_stages=len(stages),
+        run_name=run_name,
+    )
+    for j, stage in enumerate(stages):
+        prefix = f"stage{j}_"
+        for key, value in stage.items():
+            if value is True:
+                command += f"--{prefix}{key} "
+            else:
+                command += f"--{prefix}{key} {value} "
+
+    return command
+
+
+# for stages in stages_list:
+#     for oracle_cost in oracle_costs:
+#         for budget in budgets:
+#             for spending_ratio in spending_ratios:
+#                 cmd = get_command(stages, oracle_cost, budget, spending_ratio)
+#                 if cmd:
+#                     print(cmd)
+
+for budget in [1000, 10_000, 100_000]:
+    # get w2s perf
+    print(get_command(stages_list[0], 10, budget, 0.0))
+    # get ceiling perf
+    print(get_command(stages_list[0], 10, budget, 1.0))
