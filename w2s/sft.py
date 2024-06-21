@@ -51,8 +51,8 @@ def prepare_for_trainer(
 
 def lm_sft(
     ds_dict: DatasetDict,
-    model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizer,
+    model,
+    tokenizer,
     train_args: TrainingArguments,
     loss: str,
     store_pre_hiddens: bool,

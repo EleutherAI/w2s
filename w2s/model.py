@@ -196,6 +196,8 @@ class Predictor(torch.nn.Module, ABC):
 
 
 class TransformerPredictor(Predictor):
+    cfg: ModelConfig
+    
     def __init__(self, cfg: ModelConfig):
         super().__init__(cfg)
         self.transformer, self.tokenizer = init_model_and_tokenizer(cfg)

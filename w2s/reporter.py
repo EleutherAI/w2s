@@ -110,7 +110,7 @@ class Reporter(ABC):
         """
         ...
 
-    def __call__(self, inputs: torch.Tensor) -> torch.Tensor:
+    def __call__(self, inputs) -> torch.Tensor:
         """
         Returns the logodds of the classifier's predictions
         """
@@ -159,8 +159,8 @@ class SftStage:
         self.train_args = kwargs
 
     def get_dataset(
-        self, oracle: Oracle, weak_ds: Dataset, test_ds: Dataset, reporter: Reporter
-    ) -> Dataset:
+        self, oracle: Oracle, weak_ds: Dataset, test_ds: Dataset, reporter: ModularSftReporter
+    ) -> DatasetDict:
         inputs = oracle.get_inputs() if self.type == "oracle" else weak_ds
         label_col = "soft_pred" if self.type == "weak" else "soft_label"
 
@@ -168,7 +168,7 @@ class SftStage:
             idxs = random.sample(range(len(inputs)), self.size)
         elif self.sampling == "least_confident_pred":
             print("Selecting examples with highest reporter entropy for training.")
-            pred_logodds = reporter(inputs["txt"])
+            pred_logodds = reporter(inputs["txt"])  # type: ignore
             probs = torch.nn.functional.sigmoid(pred_logodds)
             probs = torch.stack([1 - probs, probs], dim=-1)
 
@@ -187,7 +187,7 @@ class SftStage:
             raise ValueError(f"Unknown sampling method: {self.sampling}")
 
         if self.type == "oracle":
-            ids = np.array(inputs["id"])[idxs].tolist()
+            ids = [inputs["id"].iloc[idx] for idx in idxs] if len(inputs) > 0 else []  # type: ignore
             train_ds = Dataset.from_pandas(oracle.query_ids(ids), preserve_index=False)
         else:
             train_ds = weak_ds.select(idxs)
@@ -201,7 +201,7 @@ class SftStage:
         return DatasetDict(**ds_dict)
 
     def run(
-        self, reporter: Reporter, optimizer_checkpoint: Optional[str] = None
+        self, reporter: ModularSftReporter, optimizer_checkpoint: Optional[str] = None
     ) -> str:
         assert isinstance(reporter.strong_model, TransformerPredictor)
         if reporter.strong_model.cfg.enable_lora:
@@ -239,9 +239,16 @@ class SftStage:
             score_data = reporter.strong_model.transformer.score.weight.data
             score_data.normal_(0, 0.01 / score_data.shape[-1] ** 0.5)
 
+        save_dir = Path(self.train_args["output_dir"])
+        results_path = save_dir / "config.json"
+        # we temporarily change the sampling method to avoid doing inference for cached training run data selection
+        if results_path.exists() and (save_dir / "best-ckpt").exists():
+            actual_sampling, self.sampling = self.sampling, "random"
         ds_dict = self.get_dataset(
             reporter.oracle, reporter.weak_ds, reporter.test_ds, reporter
         )
+        if results_path.exists() and (save_dir / "best-ckpt").exists():
+            self.sampling = actual_sampling
         train_args = self.train_args.copy()
 
         print(f"{get_gpu_mem_used()} before training")
@@ -280,14 +287,14 @@ class ModularSftReporter(Reporter):
         input_col: str = "txt",
     ):
         super().__init__(weak_ds, oracle, test_ds, strong_model, input_col)
-        self.stage_configs = stages
+        self.stages = stages
         self.test_ds = ds_with_labels(test_ds)
 
         assert input_col == "txt", "Only LM SFT is supported"
 
     def fit(self) -> ModularSftReporter:
         optimizer_checkpoint = None
-        for i, stage_config in enumerate(self.stage_configs):
+        for i, stage_config in enumerate(self.stages):
             print(f"\n\033[32m [Stage {i}] \033[0m")
             optimizer_checkpoint = stage_config.run(self, optimizer_checkpoint)
 
@@ -296,7 +303,7 @@ class ModularSftReporter(Reporter):
     def to_dict(self) -> dict:
         return {
             "method": self.__class__.__name__,
-            "stage_configs": [s.to_dict() for s in self.stage_configs],
+            "stages": [s.to_dict() for s in self.stages],
             "model": self.strong_model.to_dict(),
         }
 
@@ -308,7 +315,7 @@ class ModularSftReporter(Reporter):
             Dataset.from_dict({self.input_col: inputs}), self.strong_model.tokenizer
         )
         # turn off wandb logging in trainer
-        targs = self.stage_configs[0].train_args.copy()
+        targs = self.stages[0].train_args.copy()
         targs["report_to"] = "none"
         targs["output_dir"] = "tmp"
         targs["run_name"] = "tmp"
@@ -337,8 +344,8 @@ class DivDisSftReporter(Reporter):
     """
 
     best_head: int
-    bias: torch.nn.Parameter = torch.nn.Parameter(torch.tensor(0.0))
-    scale: torch.nn.Parameter = torch.nn.Parameter(torch.tensor(1.0))
+    bias = torch.nn.Parameter(torch.tensor(0.0))
+    scale = torch.nn.Parameter(torch.tensor(1.0))
 
     def __init__(
         self,
@@ -372,7 +379,7 @@ class DivDisSftReporter(Reporter):
         )
         train_target_ds = train_target_ds.add_column(
             "labels", [-1.0] * len(train_target_ds)
-        ).cast(weak_ds.features)
+        ).cast(weak_ds.features)  # type: ignore
         weak_ds = concatenate_datasets([weak_ds, train_target_ds])
         weak_ds_dict = DatasetDict(train=weak_ds, test=self.test_ds)
 
@@ -391,7 +398,6 @@ class DivDisSftReporter(Reporter):
         # then disambiguate
         if max_queries > 0:
             oracle_ds = ds_with_labels(self.get_oracle_ds(max_queries))
-            breakpoint()
             self._disambiguate(oracle_ds)
             self._platt_scale(oracle_ds)
         else:
@@ -425,7 +431,7 @@ class DivDisSftReporter(Reporter):
 
         uncertain_idxs = torch.multinomial(avg_xents, max_queries, replacement=False)
 
-        oracle_ids = np.array(all_oracle_inputs["id"])[uncertain_idxs].tolist()
+        oracle_ids = [all_oracle_inputs["id"][idx] for idx in uncertain_idxs] if len(all_oracle_inputs) > 0 else []
         return Dataset.from_pandas(
             self.oracle.query_ids(oracle_ids), preserve_index=False
         ).shuffle()
@@ -438,7 +444,8 @@ class DivDisSftReporter(Reporter):
         labels = (torch.as_tensor(oracle_ds["labels"]) > 0.5).long()
         labels = labels.unsqueeze(-1).expand(-1, pred_logits.shape[-1])
         aurocs = roc_auc(labels, pred_logits)
-        self.best_head = aurocs.argmax().item()
+        self.best_head = int(aurocs.argmax())
+        return self.best_head
 
     def _platt_scale(self, oracle_ds: Dataset, max_iter: int = 100) -> None:
         """Fit the scale and bias terms to data with LBFGS.
