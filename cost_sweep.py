@@ -19,6 +19,8 @@ import copy
 # around 30 ft runs then
 
 # Define the datasets and respective GPU ids
+# weak_labels_dir = "amazon_polarity_title_only"  # NOTE
+# weak_labels_dir = "sciq_support_contains"  # NOTE
 weak_labels_dir = "ethics_deontology_excuse_only"  # NOTE
 
 temp = 0.25
@@ -97,12 +99,18 @@ def get_command(stages, oracle_cost, budget, spending_ratio):
 
     if budget < 10 * oracle_cost:
         return
-    if num_weak > 9_000 or num_oracle > 2000:
+    if num_weak > 9_000 or num_oracle > 9000:
         return
 
     stages = copy.deepcopy(stages)
     for stage in stages:
         total_points = stage["size"] * stage["num_train_epochs"]
+        # NOTE: this preserves number of total datapoints, but not:
+        #   - relative ratios of where each type of data is used
+        #   - the total number of batches for size<batch_size
+        # note that it also often can use more data than specified by num_weak and num_oracle
+        # because of multiple stages, but also could be less because of sampling data repeatedly
+        # so you should look at logs for actual number of each
         if stage["type"] == "weak":
             stage["size"] = num_weak
             stage["num_train_epochs"] = max(total_points // num_weak, 1)
@@ -131,16 +139,41 @@ def get_command(stages, oracle_cost, budget, spending_ratio):
     return command
 
 
-# for stages in stages_list:
-#     for oracle_cost in oracle_costs:
-#         for budget in budgets:
-#             for spending_ratio in spending_ratios:
-#                 cmd = get_command(stages, oracle_cost, budget, spending_ratio)
-#                 if cmd:
-#                     print(cmd)
+for stages in stages_list:
+    for oracle_cost in oracle_costs:
+        for budget in budgets:
+            for spending_ratio in spending_ratios:
+                cmd = get_command(stages, oracle_cost, budget, spending_ratio)
+                if cmd:
+                    print(cmd)
 
-for budget in [1000, 10_000, 100_000]:
+stages = [
+        {
+            "modules_with_grad": "head",
+            "size": 1024,
+            "sampling": "random",
+            "num_train_epochs": 3,
+        },
+        {
+            "modules_with_grad": "all",
+            "size": 32,
+            "sampling": "random",
+            "num_train_epochs": 100,
+        },
+        {
+            "modules_with_grad": "all",
+            "reinit_head": True,
+            "size": 1024 + 1600,
+            "num_train_epochs": 1,
+        }
+]
+
+for budget in [1000, 10_000, 90_000]:
     # get w2s perf
-    print(get_command(stages_list[0], 10, budget, 0.0))
+    for stage in stages:
+        stage["type"] = "weak"
+    print(get_command(stages, 10, budget, 0.0))
     # get ceiling perf
-    print(get_command(stages_list[0], 10, budget, 1.0))
+    for stage in stages:
+        stage["type"] = "oracle"
+    print(get_command(stages, 10, budget, 1.0))
