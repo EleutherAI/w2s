@@ -6,10 +6,15 @@ import schedule
 
 parser = argparse.ArgumentParser()
 parser.add_argument("cmds_file", type=str)
+parser.add_argument("--delay-hours", type=float, default=0)
+parser.add_argument("--gpu-ids", type=str, default="")
 args = parser.parse_args()
 cmds_file = args.cmds_file
+gpu_ids = list(map(int, args.gpu_ids.split(",")))
+print(gpu_ids)
 # List of commands to execute
 commands = open(cmds_file).read().strip().split("\n")
+time.sleep(args.delay_hours * 60 * 60)
 
 recently_used_gpus = dict()
 
@@ -33,7 +38,7 @@ def check_gpu_memory():
         free_memory_list = [int(x) for x in result.stdout.strip().split("\n")]
 
         for i, free_memory in enumerate(free_memory_list):
-            if free_memory > 40000 and i not in recently_used_gpus:
+            if free_memory > 40000 and i not in recently_used_gpus and i in gpu_ids:
                 print(f"GPU {i} has {free_memory} MB free. Running the next command.")
                 recently_used_gpus[i] = time.time()
                 run_next_command(i)

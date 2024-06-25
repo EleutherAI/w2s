@@ -5,7 +5,6 @@ from abc import ABC
 from pathlib import Path
 from typing import Literal, Optional
 
-import numpy as np
 import pandas as pd
 import torch
 from datasets import Dataset, DatasetDict, concatenate_datasets
@@ -159,7 +158,11 @@ class SftStage:
         self.train_args = kwargs
 
     def get_dataset(
-        self, oracle: Oracle, weak_ds: Dataset, test_ds: Dataset, reporter: ModularSftReporter
+        self,
+        oracle: Oracle,
+        weak_ds: Dataset,
+        test_ds: Dataset,
+        reporter: ModularSftReporter,
     ) -> DatasetDict:
         inputs = oracle.get_inputs() if self.type == "oracle" else weak_ds
         label_col = "soft_pred" if self.type == "weak" else "soft_label"
@@ -187,7 +190,11 @@ class SftStage:
             raise ValueError(f"Unknown sampling method: {self.sampling}")
 
         if self.type == "oracle":
-            ids = [inputs["id"].iloc[idx] for idx in idxs] if len(inputs) > 0 else []  # type: ignore
+            ids = (
+                [inputs["id"].iloc[int(idx)] for idx in idxs]  # type: ignore
+                if len(inputs) > 0
+                else []
+            )
             train_ds = Dataset.from_pandas(oracle.query_ids(ids), preserve_index=False)
         else:
             train_ds = weak_ds.select(idxs)
@@ -241,7 +248,8 @@ class SftStage:
 
         save_dir = Path(self.train_args["output_dir"])
         results_path = save_dir / "config.json"
-        # we temporarily change the sampling method to avoid doing inference for cached training run data selection
+        # we temporarily change the sampling method to avoid doing
+        # inference for cached training run data selection
         if results_path.exists() and (save_dir / "best-ckpt").exists():
             actual_sampling, self.sampling = self.sampling, "random"
         ds_dict = self.get_dataset(
@@ -379,7 +387,9 @@ class DivDisSftReporter(Reporter):
         )
         train_target_ds = train_target_ds.add_column(
             "labels", [-1.0] * len(train_target_ds)
-        ).cast(weak_ds.features)  # type: ignore
+        ).cast(
+            weak_ds.features
+        )  # type: ignore
         weak_ds = concatenate_datasets([weak_ds, train_target_ds])
         weak_ds_dict = DatasetDict(train=weak_ds, test=self.test_ds)
 
@@ -431,7 +441,11 @@ class DivDisSftReporter(Reporter):
 
         uncertain_idxs = torch.multinomial(avg_xents, max_queries, replacement=False)
 
-        oracle_ids = [all_oracle_inputs["id"][idx] for idx in uncertain_idxs] if len(all_oracle_inputs) > 0 else []
+        oracle_ids = (
+            [all_oracle_inputs["id"][idx] for idx in uncertain_idxs]
+            if len(all_oracle_inputs) > 0
+            else []
+        )
         return Dataset.from_pandas(
             self.oracle.query_ids(oracle_ids), preserve_index=False
         ).shuffle()
