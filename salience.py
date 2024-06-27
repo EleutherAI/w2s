@@ -25,6 +25,7 @@ def train_reporter_on_transformer(
     strong_model_name: str = "meta-llama/Meta-Llama-3-8B",
     disable_lora: bool = False,
     quantize: bool = False,
+    max_ctx: int = 1024,
     # ExperimentConfig
     run_name: str = "salience",
     seed: int = 42,
@@ -69,6 +70,7 @@ def train_reporter_on_transformer(
         not disable_lora,
         TransformerPredictor,
         quantize=quantize,
+        max_ctx=max_ctx,
     )
     model = mcfg.initialize_model()
 
@@ -81,6 +83,7 @@ def train_reporter_on_transformer(
         store_pre_hiddens=False,
         store_post_hiddens=False,
         cfg=mcfg.to_dict(),
+        save=False,
     )
 
 

@@ -44,6 +44,7 @@ class ModelConfig(PredictorConfig):
     lora_modules: Optional[List[str]] = None
     num_heads: int = 1
     quantize: bool = False
+    max_ctx: int = 1024
 
     def to_dict(self):
         d = vars(self).copy()
@@ -122,7 +123,7 @@ def init_model_and_tokenizer(cfg: ModelConfig):
             "lora_modules", DEFAULT_LORA_MODULES
         )
 
-    tokenizer = AutoTokenizer.from_pretrained(cfg.name)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.name, model_max_length=cfg.max_ctx)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 

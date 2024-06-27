@@ -21,6 +21,7 @@ from w2s.sft_utils import (
     gather_hiddens,
     get_gpu_mem_used,
     move_best_ckpt,
+    delete_all_ckpts
 )
 
 
@@ -60,6 +61,7 @@ def lm_sft(
     cfg: dict,
     predict_dict: Union[None, Dict, DatasetDict] = None,
     resume_from_checkpoint: Optional[str] = None,
+    save: bool = True,
 ) -> Trainer:
     """
     ds_dict: DatasetDict with splits for train, val, test,
@@ -91,7 +93,7 @@ def lm_sft(
         args=train_args,
         compute_metrics=compute_acc_and_auroc,
         data_collator=DataCollatorWithPadding(
-            tokenizer, max_length=1024, padding="max_length"
+            tokenizer, padding="longest",
         ),  # NOTE: this could mess up some datasets
         eval_dataset={
             k: ds_dict[k] for k in {"val", "test"}.intersection(ds_dict.keys())
@@ -158,4 +160,7 @@ def lm_sft(
         torch.save(hiddens, save_dir / "post_hiddens.pt")
 
     wandb.finish()
+    if not save:
+        delete_all_ckpts(trainer)
+
     return trainer

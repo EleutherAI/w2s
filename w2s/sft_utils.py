@@ -67,6 +67,14 @@ def move_best_ckpt(trainer: Trainer):
     print(f"Best model (auroc {perf:.3f}) saved at: {dest}")
 
 
+def delete_all_ckpts(trainer: Trainer):
+    for ckpt in Path(trainer.args.output_dir).glob("checkpoint-*"):
+        ckpt.rmdir()
+    ckpt = Path(trainer.args.output_dir) / "best-ckpt"
+    if ckpt.exists():
+        ckpt.rmdir()
+
+
 def clear_mem(verbose: bool = False):
     """
     This function is used to clear the memory allocated by PyTorch.
