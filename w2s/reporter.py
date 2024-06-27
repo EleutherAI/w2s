@@ -250,8 +250,9 @@ class SftStage:
         results_path = save_dir / "config.json"
         # we temporarily change the sampling method to avoid doing
         # inference for cached training run data selection
+        actual_sampling = self.sampling
         if results_path.exists() and (save_dir / "best-ckpt").exists():
-            actual_sampling, self.sampling = self.sampling, "random"
+            self.sampling = "random"
         ds_dict = self.get_dataset(
             reporter.oracle, reporter.weak_ds, reporter.test_ds, reporter
         )

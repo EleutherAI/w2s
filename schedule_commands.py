@@ -7,7 +7,7 @@ import schedule
 parser = argparse.ArgumentParser()
 parser.add_argument("cmds_file", type=str)
 parser.add_argument("--delay-hours", type=float, default=0)
-parser.add_argument("--gpu-ids", type=str, default="")
+parser.add_argument("--gpu-ids", type=str, default="0,1,2,3,4,5,6,7")
 args = parser.parse_args()
 cmds_file = args.cmds_file
 gpu_ids = list(map(int, args.gpu_ids.split(",")))

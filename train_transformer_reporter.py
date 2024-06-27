@@ -48,7 +48,7 @@ def train_reporter_on_transformer(
     reporter_args["output_dir"] = str(Path(results_folder) / run_name)
 
     stage_args = split_args_by_prefix(
-        reporter_args, [f"stage{i}_" for i in range(reporter_stages)]
+        reporter_args, [f"stage{i}_" for i in range(reporter_stages)]  # type: ignore
     )
     for stage in stage_args:
         stage_args[stage]["output_dir"] = str(
@@ -60,12 +60,10 @@ def train_reporter_on_transformer(
     # load datasets
     weak_ds = assert_type(Dataset, load_from_disk(weak_ds_path))
     weak_ds = weak_ds.remove_columns(["soft_label", "hard_label"])
-    oracle_ds = (
-        assert_type(Dataset, load_from_disk(oracle_ds_path))
-        .shuffle()
-        .select(range(oracle_pool_size))
-    )
-    test_ds = assert_type(Dataset, load_from_disk(test_ds_path)).select(range(n_test))
+    oracle_ds = assert_type(Dataset, load_from_disk(oracle_ds_path)).shuffle()
+    oracle_ds = oracle_ds.select(range(min(oracle_pool_size, len(oracle_ds))))
+    test_ds = assert_type(Dataset, load_from_disk(test_ds_path))
+    test_ds = test_ds.select(range(min(n_test, len(test_ds))))
 
     dataset_cfg_dict = {
         "weak_ds_path": str(weak_ds_path),
@@ -75,7 +73,7 @@ def train_reporter_on_transformer(
         "weak_pool_size": weak_pool_size,
         "oracle_pool_size": len(oracle_ds),
     }
-    weak_ds = weak_ds.shuffle().select(range(weak_pool_size))
+    weak_ds = weak_ds.shuffle().select(range(min(weak_pool_size, len(weak_ds))))
 
     assert num_heads == 1
     mcfg = ModelConfig(
