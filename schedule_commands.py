@@ -60,10 +60,10 @@ def run_next_command(gpu_index):
         print("No more commands to run.")
 
 
-# Schedule the GPU check every minute
-schedule.every(5).seconds.do(check_gpu_memory)
+sec = 5
+schedule.every(sec).seconds.do(check_gpu_memory)
 
-print("Scheduler started. Checking GPU status every minute.")
+print(f"Scheduler started. Checking GPU status every {sec} seconds.")
 while True:
     schedule.run_pending()
     time.sleep(1)

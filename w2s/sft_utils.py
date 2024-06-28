@@ -1,4 +1,5 @@
 import gc
+import shutil
 from pathlib import Path
 
 import pynvml
@@ -69,10 +70,10 @@ def move_best_ckpt(trainer: Trainer):
 
 def delete_all_ckpts(trainer: Trainer):
     for ckpt in Path(trainer.args.output_dir).glob("checkpoint-*"):
-        ckpt.rmdir()
+        shutil.rmtree(ckpt)
     ckpt = Path(trainer.args.output_dir) / "best-ckpt"
     if ckpt.exists():
-        ckpt.rmdir()
+        shutil.rmtree(ckpt)
 
 
 def clear_mem(verbose: bool = False):
